@@ -1,0 +1,265 @@
+"""
+Dataset generation for the 2x2x2 Pocket Cube experiment.
+
+Step 1: BFS from the solved state to compute exact optimal distances
+        and optimal first moves for all 3,674,160 reachable states.
+
+Step 2: Generate training/validation/test splits by backward scrambling.
+"""
+
+import numpy as np
+import os
+import pickle
+from collections import deque
+from tqdm import tqdm
+
+from cube_env import (
+    SOLVED_STATE, MOVES, MOVE_NAMES, INVERSE_MOVE, NUM_MOVES,
+    apply_move, encode_state, state_to_tuple, tuple_to_state,
+)
+
+# Expected number of reachable states (God's number = 14 in QTM with R,U,F quarter turns)
+TOTAL_STATES = 3_674_160
+MAX_DISTANCE = 14  # God's number in QTM (we use only R,R',U,U',F,F' quarter turns)
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "results", "data")
+
+
+# ─── BFS ──────────────────────────────────────────────────────────────────────
+
+def run_bfs(verbose=True):
+    """BFS from solved state over all 3,674,160 reachable states.
+
+    Returns:
+        dist_table: dict mapping state_tuple -> optimal_distance (int)
+        move_table: dict mapping state_tuple -> optimal_first_move_index (int)
+                    The move that leads to a neighbor with distance d-1.
+                    (For the solved state, move is -1.)
+    """
+    solved_tuple = state_to_tuple(SOLVED_STATE)
+    dist_table = {solved_tuple: 0}
+    move_table = {solved_tuple: -1}
+
+    queue = deque([SOLVED_STATE.copy()])
+    n_visited = 1
+
+    if verbose:
+        print(f"Starting BFS from solved state...")
+        print(f"Expected states: {TOTAL_STATES:,}")
+        pbar = tqdm(total=TOTAL_STATES, desc="BFS")
+        pbar.update(1)
+
+    while queue:
+        state = queue.popleft()
+        current_dist = dist_table[state_to_tuple(state)]
+
+        for move_idx in range(NUM_MOVES):
+            next_state = apply_move(state, MOVES[move_idx])
+            next_tuple = state_to_tuple(next_state)
+
+            if next_tuple not in dist_table:
+                dist_table[next_tuple] = current_dist + 1
+                # The optimal move from next_state towards solved is the inverse
+                # of the move that got us here (since BFS is from solved outward).
+                move_table[next_tuple] = INVERSE_MOVE[move_idx]
+                queue.append(next_state)
+                n_visited += 1
+
+                if verbose:
+                    pbar.update(1)
+
+    if verbose:
+        pbar.close()
+        print(f"BFS complete. Visited {n_visited:,} states.")
+        # Print distance distribution
+        from collections import Counter
+        dist_counts = Counter(dist_table.values())
+        actual_max = max(dist_counts.keys())
+        print(f"\nDistance distribution (max_dist={actual_max}):")
+        for d in range(actual_max + 1):
+            print(f"  d={d:2d}: {dist_counts.get(d, 0):>10,} states")
+
+    return dist_table, move_table
+
+
+def save_bfs_tables(dist_table, move_table, path=None):
+    """Save BFS tables to disk."""
+    if path is None:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        path = os.path.join(DATA_DIR, "bfs_tables.pkl")
+    with open(path, "wb") as f:
+        pickle.dump({"dist": dist_table, "move": move_table}, f,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"BFS tables saved to {path}")
+
+
+def load_bfs_tables(path=None):
+    """Load BFS tables from disk."""
+    if path is None:
+        path = os.path.join(DATA_DIR, "bfs_tables.pkl")
+    with open(path, "rb") as f:
+        data = pickle.load(f)
+    return data["dist"], data["move"]
+
+
+def bfs_tables_exist(path=None):
+    if path is None:
+        path = os.path.join(DATA_DIR, "bfs_tables.pkl")
+    return os.path.exists(path)
+
+
+# ─── Dataset generation ───────────────────────────────────────────────────────
+
+def generate_dataset(n_samples, dist_table, move_table, rng=None,
+                     max_scramble=MAX_DISTANCE, verbose=True):
+    """Generate a dataset of (encoded_state, distance, optimal_move) triples.
+
+    For each sample:
+      1. Start from solved state
+      2. Apply k ~ Uniform(1, max_scramble) random moves
+      3. Look up true BFS distance and optimal move
+
+    Returns:
+        X: (n_samples, 144) float32  — one-hot encoded states
+        y_dist: (n_samples,) int32   — BFS optimal distance (0-11)
+        y_move: (n_samples,) int32   — optimal first move index (0-5)
+    """
+    if rng is None:
+        rng = np.random.RandomState(42)
+
+    X = np.zeros((n_samples, 144), dtype=np.float32)
+    y_dist = np.zeros(n_samples, dtype=np.int32)
+    y_move = np.zeros(n_samples, dtype=np.int32)
+
+    iterator = tqdm(range(n_samples), desc="Generating") if verbose else range(n_samples)
+
+    for i in iterator:
+        state = SOLVED_STATE.copy()
+        k = rng.randint(1, max_scramble + 1)
+
+        last_move = -1
+        for _ in range(k):
+            candidates = [m for m in range(NUM_MOVES) if m != INVERSE_MOVE[last_move]] \
+                if last_move >= 0 else list(range(NUM_MOVES))
+            move = rng.choice(candidates)
+            state = apply_move(state, MOVES[move])
+            last_move = move
+
+        state_t = state_to_tuple(state)
+        X[i] = encode_state(state)
+        y_dist[i] = dist_table[state_t]
+        y_move[i] = move_table[state_t]
+
+    return X, y_dist, y_move
+
+
+def generate_test_dataset_stratified(n_per_depth, dist_table, move_table,
+                                     rng=None, verbose=True):
+    """Generate a test set stratified by depth (roughly n_per_depth per depth).
+
+    Returns X, y_dist, y_move (same format as generate_dataset).
+    """
+    if rng is None:
+        rng = np.random.RandomState(999)
+
+    # Collect states at each distance
+    if verbose:
+        print("Collecting states by depth for stratified test set...")
+
+    actual_max = max(dist_table.values())
+    states_by_depth = {d: [] for d in range(actual_max + 1)}
+    for state_t, d in tqdm(dist_table.items(), total=len(dist_table),
+                            disable=not verbose, desc="Indexing"):
+        states_by_depth[d].append(state_t)
+
+    X_list, y_dist_list, y_move_list = [], [], []
+
+    for d in range(MAX_DISTANCE + 1):
+        pool = states_by_depth[d]
+        n = min(n_per_depth, len(pool))
+        indices = rng.choice(len(pool), size=n, replace=False)
+        selected = [pool[i] for i in indices]
+
+        for state_t in selected:
+            state = tuple_to_state(state_t)
+            X_list.append(encode_state(state))
+            y_dist_list.append(dist_table[state_t])
+            y_move_list.append(move_table[state_t])
+
+    X = np.array(X_list, dtype=np.float32)
+    y_dist = np.array(y_dist_list, dtype=np.int32)
+    y_move = np.array(y_move_list, dtype=np.int32)
+    return X, y_dist, y_move
+
+
+def save_dataset(X, y_dist, y_move, split_name, n_train=None):
+    """Save dataset arrays to disk."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    suffix = f"_{n_train // 1000}k" if n_train is not None else ""
+    tag = f"{split_name}{suffix}"
+    np.save(os.path.join(DATA_DIR, f"X_{tag}.npy"), X)
+    np.save(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"), y_dist)
+    np.save(os.path.join(DATA_DIR, f"y_move_{tag}.npy"), y_move)
+    print(f"Saved {tag}: X={X.shape}, y_dist={y_dist.shape}, y_move={y_move.shape}")
+
+
+def load_dataset(split_name, n_train=None):
+    """Load dataset arrays from disk."""
+    suffix = f"_{n_train // 1000}k" if n_train is not None else ""
+    tag = f"{split_name}{suffix}"
+    X = np.load(os.path.join(DATA_DIR, f"X_{tag}.npy"))
+    y_dist = np.load(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"))
+    y_move = np.load(os.path.join(DATA_DIR, f"y_move_{tag}.npy"))
+    return X, y_dist, y_move
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bfs-only", action="store_true",
+                        help="Only run BFS, skip dataset generation")
+    parser.add_argument("--skip-bfs", action="store_true",
+                        help="Load existing BFS tables instead of recomputing")
+    args = parser.parse_args()
+
+    # ── Step 1: BFS ──────────────────────────────────────────────────────────
+    if args.skip_bfs and bfs_tables_exist():
+        print("Loading existing BFS tables...")
+        dist_table, move_table = load_bfs_tables()
+        print(f"Loaded {len(dist_table):,} states.")
+    else:
+        dist_table, move_table = run_bfs(verbose=True)
+        save_bfs_tables(dist_table, move_table)
+
+    if args.bfs_only:
+        print("BFS only mode — done.")
+        exit(0)
+
+    # ── Step 2: Generate datasets ─────────────────────────────────────────────
+    TRAIN_SIZES = [50_000, 200_000, 1_000_000]
+    VAL_SIZE = 20_000
+    TEST_N_PER_DEPTH = 1000  # ~11K total test samples
+
+    rng_val = np.random.RandomState(100)
+    rng_test = np.random.RandomState(200)
+
+    print("\nGenerating validation set...")
+    X_val, y_val_dist, y_val_move = generate_dataset(
+        VAL_SIZE, dist_table, move_table, rng=rng_val)
+    save_dataset(X_val, y_val_dist, y_val_move, "val")
+
+    print("\nGenerating stratified test set...")
+    X_test, y_test_dist, y_test_move = generate_test_dataset_stratified(
+        TEST_N_PER_DEPTH, dist_table, move_table, rng=rng_test)
+    save_dataset(X_test, y_test_dist, y_test_move, "test")
+
+    for n_train in TRAIN_SIZES:
+        print(f"\nGenerating training set ({n_train:,} samples)...")
+        rng_train = np.random.RandomState(300 + n_train)
+        X_train, y_train_dist, y_train_move = generate_dataset(
+            n_train, dist_table, move_table, rng=rng_train)
+        save_dataset(X_train, y_train_dist, y_train_move, "train", n_train)
+
+    print("\nAll datasets generated.")
