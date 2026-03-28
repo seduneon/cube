@@ -17,11 +17,8 @@ Usage:
     python run_all.py --quick          # small test run (1K samples, 2 epochs)
 """
 
-import os
-import sys
 import time
 import argparse
-import subprocess
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -160,7 +157,7 @@ def step_train(skip_train, model_filter, quick, train_sizes):
         print("Install emlp and re-run with --skip-bfs --skip-data")
         return
 
-    from train import train_one, SEEDS, SIZE_LABELS
+    from train import train_one, SEEDS, size_label
     import train as train_module
 
     if skip_train:
@@ -183,7 +180,7 @@ def step_train(skip_train, model_filter, quick, train_sizes):
             for seed in seeds:
                 try:
                     best_val, _ = train_one(model_type, train_size, seed, verbose=True)
-                    key = f"{model_type}_{SIZE_LABELS[train_size]}_seed{seed}"
+                    key = f"{model_type}_{size_label(train_size)}_seed{seed}"
                     results[key] = best_val
                 except Exception as e:
                     print(f"  ERROR training {model_type} {train_size} seed{seed}: {e}")

@@ -36,14 +36,11 @@ CH = 384
 NUM_LAYERS = 3
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]
-SIZE_LABELS = {1000: "1k", 50_000: "50k", 200_000: "200k", 1_000_000: "1m"}
 SEEDS = [0, 1, 2]
 
 
 def size_label(n):
     """Get a short label string for a training set size."""
-    if n in SIZE_LABELS:
-        return SIZE_LABELS[n]
     if n >= 1_000:
         return f"{n // 1000}k"
     return str(n)

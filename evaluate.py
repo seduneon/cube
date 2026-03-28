@@ -34,7 +34,7 @@ from models import (
     get_param_count, EMLP_AVAILABLE,
 )
 from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist
-from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SIZE_LABELS, SEEDS
+from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SEEDS, size_label
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 PLOT_DIR = os.path.join(RESULTS_DIR, "plots")
@@ -47,7 +47,7 @@ MAX_DISTANCE = 14  # QTM with R,R',U,U',F,F' quarter turns
 
 def load_checkpoint(model_type, train_size, seed):
     """Load a model from its best checkpoint."""
-    label = f"{model_type}_{SIZE_LABELS[train_size]}_seed{seed}"
+    label = f"{model_type}_{size_label(train_size)}_seed{seed}"
     ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
@@ -249,7 +249,7 @@ def evaluate_solve_rate(model, n_trials=1000, scramble_depths=None, verbose=True
 # ─── Load logs ────────────────────────────────────────────────────────────────
 
 def load_log(model_type, train_size, seed):
-    label = f"{model_type}_{SIZE_LABELS[train_size]}_seed{seed}"
+    label = f"{model_type}_{size_label(train_size)}_seed{seed}"
     log_path = os.path.join(LOG_DIR, f"{label}.csv")
     if not os.path.exists(log_path):
         return None
@@ -269,7 +269,7 @@ SIZE_COLORS = {50_000: "#E91E63", 200_000: "#9C27B0", 1_000_000: "#3F51B5"}
 def plot_learning_curves(train_size=200_000):
     """Plot train/val MSE vs epoch for EMLP and MLP (mean ± std over 3 seeds)."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle(f"Learning Curves (train size = {SIZE_LABELS[train_size]})", fontsize=14)
+    fig.suptitle(f"Learning Curves (train size = {size_label(train_size)})", fontsize=14)
 
     for ax_idx, metric in enumerate(["train_mse", "val_mse"]):
         ax = axes[ax_idx]
@@ -472,7 +472,7 @@ def run_full_evaluation(train_size_for_detail=200_000):
                 try:
                     model = load_checkpoint(model_type, train_size, 0)
 
-                    print(f"\n── {model_type.upper()} ({SIZE_LABELS[train_size]}) ──")
+                    print(f"\n── {model_type.upper()} ({size_label(train_size)}) ──")
 
                     print("  Equivariance error...")
                     eq_err, _ = equivariance_error(model, X_test)
