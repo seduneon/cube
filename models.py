@@ -138,10 +138,11 @@ def save_model(model, path):
 
 def load_model(model, path):
     """Load model parameters from a .npz file."""
+    import jax.numpy as jnp
     data = np.load(path)
     for k, v in model.vars().items():
         if k in data:
-            v.assign(data[k])
+            v.assign(jnp.array(data[k]))
         else:
             print(f"Warning: key {k} not found in checkpoint")
 

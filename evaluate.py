@@ -99,15 +99,17 @@ def equivariance_error(model, X_test, n_rotations=10, n_states=500):
     all_rotations = enumerate_group_elements(X_ROT_PERM, Y_ROT_PERM)
 
     # Sample random states from test set
-    idx = np.random.choice(len(X_test), size=n_states, replace=False)
-    X_sample = X_test[idx]  # (n_states, 144)
+    actual_states = min(n_states, len(X_test))
+    idx = np.random.choice(len(X_test), size=actual_states, replace=False)
+    X_sample = X_test[idx]  # (actual_states, 144)
 
     # Decode states (reverse one-hot)
-    # X has shape (n_states, 144), each row is a 24x6 one-hot flattened
-    states_sample = X_sample.reshape(n_states, 24, 6).argmax(axis=2)  # (n_states, 24)
+    # X has shape (actual_states, 144), each row is a 24x6 one-hot flattened
+    states_sample = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)  # (actual_states, 24)
 
     # Sample n_rotations random rotations
-    rot_indices = np.random.choice(len(all_rotations), size=n_rotations, replace=False)
+    actual_rotations = min(n_rotations, len(all_rotations))
+    rot_indices = np.random.choice(len(all_rotations), size=actual_rotations, replace=False)
     rotations = [all_rotations[i] for i in rot_indices]
 
     errors = []
@@ -431,11 +433,16 @@ def save_solve_rate_table(solve_results, path=None):
 
 # ─── Full evaluation run ──────────────────────────────────────────────────────
 
-def run_full_evaluation(train_size_for_detail=200_000):
+def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
     """Run all evaluation metrics and generate all plots."""
     if not EMLP_AVAILABLE:
         print("emlp not available. Cannot run evaluation.")
         return
+
+    if train_sizes is None:
+        train_sizes = TRAIN_SIZES
+    if train_size_for_detail not in train_sizes:
+        train_size_for_detail = train_sizes[-1]
 
     X_test, y_test = load_dataset("test")
     print(f"Test set: {X_test.shape}")
@@ -446,26 +453,17 @@ def run_full_evaluation(train_size_for_detail=200_000):
     solve_results = defaultdict(dict)
 
     for model_type in ["emlp", "mlp"]:
-        for train_size in TRAIN_SIZES:
+        for train_size in train_sizes:
             for seed in SEEDS:
                 try:
-                    model = load_checkpoint(model_type, train_size, seed)
-                except FileNotFoundError as e:
+                    m = load_checkpoint(model_type, train_size, seed)
+                    X_val, y_val = load_dataset("val")
+                    preds_val = model_predict(m, X_val)
+                    val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
+                    all_val_mses[(model_type, train_size, seed)] = val_mse
+                except Exception as e:
                     print(f"  Skip (no checkpoint): {e}")
-                    continue
-
-                val_mse_list = []
-                for s in SEEDS:
-                    try:
-                        m = load_checkpoint(model_type, train_size, s)
-                        X_val, y_val = load_dataset("val")
-                        preds_val = model_predict(m, X_val)
-                        val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
-                        val_mse_list.append(val_mse)
-                        all_val_mses[(model_type, train_size, s)] = val_mse
-                    except Exception:
-                        pass
-                break  # Only need one model per (type, size) for detailed metrics
+                    pass
 
             # Detailed metrics using 200K model, seed 0
             if train_size == train_size_for_detail:

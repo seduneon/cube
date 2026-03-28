@@ -193,7 +193,7 @@ def step_train(skip_train, model_filter, quick, train_sizes):
             print(f"  {k:<35s}  best_val_mse={v:.4f}")
 
 
-def step_evaluate(eval_size):
+def step_evaluate(eval_size, train_sizes):
     section("Step 6: Evaluate and generate plots")
     from models import EMLP_AVAILABLE
     if not EMLP_AVAILABLE:
@@ -202,7 +202,7 @@ def step_evaluate(eval_size):
 
     from evaluate import run_full_evaluation
     try:
-        run_full_evaluation(train_size_for_detail=eval_size)
+        run_full_evaluation(train_size_for_detail=eval_size, train_sizes=train_sizes)
     except Exception as e:
         print(f"Evaluation error: {e}")
         import traceback
@@ -242,7 +242,7 @@ def main():
 
     step_train(args.skip_train, args.model, args.quick, train_sizes)
 
-    step_evaluate(args.eval_size)
+    step_evaluate(args.eval_size, train_sizes)
 
     elapsed = time.time() - t_start
     print(f"\n{'='*60}")
