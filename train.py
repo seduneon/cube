@@ -75,7 +75,7 @@ def train_one(model_type, train_size, seed, verbose=True):
     import objax
 
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
-    ckpt_path = os.path.join(CKPT_DIR, f"{label}.pkl")
+    ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
     log_path = os.path.join(LOG_DIR, f"{label}.csv")
     os.makedirs(CKPT_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)

@@ -48,13 +48,11 @@ MAX_DISTANCE = 14  # QTM with R,R',U,U',F,F' quarter turns
 def load_checkpoint(model_type, train_size, seed):
     """Load a model from its best checkpoint."""
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
-    ckpt_path = os.path.join(CKPT_DIR, f"{label}.pkl")
+    ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
-    # load_model restores the full object (weights + EMLP basis matrices).
-    # No need to build a fresh model first.
-    model = load_model(ckpt_path)
+    model = load_model(model_type, ckpt_path)
     return model
 
 

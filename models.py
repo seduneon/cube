@@ -131,26 +131,40 @@ def cosine_decay_lr(step, total_steps, lr_init=3e-4, lr_min=1e-5):
 
 
 def save_model(model, path):
-    """Save the full model object (weights + EMLP basis matrices) via pickle.
-
-    npz only captures objax TrainVars; EMLP also stores equivariant basis
-    matrices (Pw) as plain Python attributes outside the var system. Pickling
-    the whole object preserves everything, making load deterministic.
+    """Save model weights to npz. EMLP also has non-var state (equivariant
+    basis lazy_P closures) that cannot be serialized by pickle/dill/cloudpickle.
+    We save the TrainVars and rely on the basis being deterministically
+    recomputed from the same group on load.
     """
-    import pickle
-    with open(path, "wb") as f:
-        pickle.dump(model, f)
+    np.savez(path, **{k: np.array(v.value) for k, v in model.vars().items()})
 
 
-def load_model(path):
-    """Load and return a model from a pickle checkpoint.
+def load_model(model_type, path):
+    """Build a fresh model, trigger full lazy init, then load saved weights.
 
-    Returns the restored model object. The caller should discard any
-    freshly-built model and use the returned one instead.
+    The equivariant basis (lazy_P) is recomputed deterministically from the
+    group representation — it does not depend on random state, so the loaded
+    model is functionally identical to the saved one.
     """
-    import pickle
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    import jax.numpy as jnp
+
+    if model_type == "emlp":
+        model, G, _, _ = build_emlp_model()
+    else:
+        model, G, _, _ = build_mlp_model()
+
+    # Trigger full lazy parameter allocation with the training batch size.
+    # Using only one batch size avoids creating extra lazy vars that would
+    # not be in the saved checkpoint.
+    model(jnp.zeros((256, 144), dtype=jnp.float32), training=False)
+
+    data = np.load(path)
+    for k, v in model.vars().items():
+        if k in data:
+            v.assign(jnp.array(data[k]))
+        else:
+            print(f"Warning: key '{k}' not in checkpoint")
+    return model
 
 
 # ─── Main: print model info ───────────────────────────────────────────────────
