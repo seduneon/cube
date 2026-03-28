@@ -36,6 +36,13 @@ def parse_args():
                    help="Which model(s) to train")
     p.add_argument("--eval-size", type=int, default=200_000,
                    choices=[50_000, 200_000, 1_000_000])
+    p.add_argument("--sizes", nargs="+", choices=["50k", "200k", "1m"],
+                   default=None,
+                   help="Training set sizes to use (default: 50k 200k 1m). "
+                        "Example: --sizes 50k 200k")
+    p.add_argument("--num-seeds", type=int, default=None,
+                   help="Number of seeds to use, starting from seed 0 "
+                        "(default: 3). Example: --num-seeds 1")
     return p.parse_args()
 
 
@@ -89,7 +96,7 @@ def step_bfs(skip_bfs):
     return dist_table, move_table
 
 
-def step_generate_data(dist_table, skip_data, quick):
+def step_generate_data(dist_table, skip_data, quick, train_sizes=None):
     section("Step 4: Generate datasets")
     from dataset import (
         generate_dataset, generate_test_dataset_stratified,
@@ -103,7 +110,7 @@ def step_generate_data(dist_table, skip_data, quick):
         VAL_SIZE = 200
         TEST_N_PER_DEPTH = 10
     else:
-        TRAIN_SIZES = [50_000, 200_000, 1_000_000]
+        TRAIN_SIZES = train_sizes if train_sizes is not None else [50_000, 200_000, 1_000_000]
         VAL_SIZE = 20_000
         TEST_N_PER_DEPTH = 1_000
 
@@ -149,7 +156,7 @@ def step_generate_data(dist_table, skip_data, quick):
     return TRAIN_SIZES
 
 
-def step_train(skip_train, model_filter, quick, train_sizes):
+def step_train(skip_train, model_filter, quick, train_sizes, num_seeds=None):
     section("Step 5: Train models")
     from models import EMLP_AVAILABLE
     if not EMLP_AVAILABLE:
@@ -170,7 +177,7 @@ def step_train(skip_train, model_filter, quick, train_sizes):
         train_module.EARLY_STOP_PATIENCE = 2
         seeds = [0]
     else:
-        seeds = SEEDS
+        seeds = SEEDS if num_seeds is None else SEEDS[:num_seeds]
 
     model_types = ["emlp", "mlp"] if model_filter == "all" else [model_filter]
 
@@ -221,6 +228,15 @@ def main():
     if args.quick:
         print("\n[QUICK MODE] Using reduced dataset sizes and epochs.")
 
+    # Resolve --sizes flag to integer list
+    _size_map = {"50k": 50_000, "200k": 200_000, "1m": 1_000_000}
+    custom_sizes = [_size_map[s] for s in args.sizes] if args.sizes else None
+
+    if custom_sizes:
+        print(f"\n[SIZES] Training set sizes: {[s // 1000 for s in custom_sizes]}k")
+    if args.num_seeds:
+        print(f"[SEEDS] Using {args.num_seeds} seed(s) instead of 3")
+
     t_start = time.time()
 
     step_verify_env()
@@ -238,11 +254,13 @@ def main():
             dist_table, move_table = load_bfs_tables()
 
     train_sizes = step_generate_data(
-        dist_table, args.skip_data, args.quick)
+        dist_table, args.skip_data, args.quick, custom_sizes)
 
-    step_train(args.skip_train, args.model, args.quick, train_sizes)
+    step_train(args.skip_train, args.model, args.quick, train_sizes, args.num_seeds)
 
-    step_evaluate(args.eval_size, train_sizes)
+    # Use largest available size for detailed eval
+    eval_size = args.eval_size if args.eval_size in train_sizes else train_sizes[-1]
+    step_evaluate(eval_size, train_sizes)
 
     elapsed = time.time() - t_start
     print(f"\n{'='*60}")
