@@ -62,14 +62,19 @@ def load_checkpoint(model_type, train_size, seed):
 
 
 def make_predict_fn(model):
-    """Create a JIT-compiled predict function. Call once per model instance."""
+    """Create a predict function. Call once per model instance.
+
+    Note: objax.Jit is intentionally not used here — it does not correctly
+    return arrays (only scalars) in JAX >= 0.4.26. Training is unaffected
+    because its JIT functions return scalars (loss values).
+    """
     import objax
 
     @objax.Function.with_vars(model.vars())
     def _predict(x):
         return model(x, training=False).squeeze()
 
-    return objax.Jit(_predict, model.vars())
+    return _predict
 
 
 def model_predict(predict_fn, X_np):
@@ -189,10 +194,59 @@ def greedy_solve(predict_fn, initial_state, max_steps=50):
     return is_solved(state), len(move_sequence), move_sequence
 
 
+def _greedy_solve_batch(predict_fn, initial_states, max_steps=50):
+    """Greedy solve for a batch of states with one forward pass per step.
+
+    Batches all n_trials × 6 neighbours into a single model call per step,
+    avoiding the per-trial overhead of the serial version.
+
+    Returns (solved: bool array, n_moves: int array)
+    """
+    import jax.numpy as jnp
+
+    n = len(initial_states)
+    states = [s.copy() for s in initial_states]
+    solved = np.zeros(n, dtype=bool)
+    n_moves = np.full(n, max_steps, dtype=int)
+
+    for step in range(max_steps):
+        # Mark any newly solved states
+        for i in range(n):
+            if not solved[i] and is_solved(states[i]):
+                solved[i] = True
+                n_moves[i] = step
+
+        active = np.where(~solved)[0]
+        if len(active) == 0:
+            break
+
+        # One batched forward pass for all active trials × 6 neighbours
+        all_next = np.array([
+            encode_state(apply_move(states[i], MOVES[m]))
+            for i in active
+            for m in range(NUM_MOVES)
+        ], dtype=np.float32)
+
+        preds = np.array(predict_fn(jnp.array(all_next)))  # (n_active * 6,)
+        preds = preds.reshape(len(active), NUM_MOVES)
+        best_moves = np.argmin(preds, axis=1)
+
+        for j, i in enumerate(active):
+            states[i] = apply_move(states[i], MOVES[best_moves[j]])
+
+    # Final solved check
+    for i in range(n):
+        if not solved[i] and is_solved(states[i]):
+            solved[i] = True
+            n_moves[i] = max_steps
+
+    return solved, n_moves
+
+
 def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose=True):
     """Evaluate greedy solve rate at various scramble depths.
 
-    predict_fn: JIT-compiled predict function from make_predict_fn().
+    predict_fn: predict function from make_predict_fn().
     Returns dict: depth -> {solve_rate, mean_moves, mean_excess}
     """
     if scramble_depths is None:
@@ -202,9 +256,8 @@ def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose
     rng = np.random.RandomState(42)
 
     for depth in scramble_depths:
-        solved_count = 0
-        move_lengths = []
-
+        # Generate all start states upfront
+        start_states = []
         for _ in range(n_trials):
             s = SOLVED_STATE.copy()
             last = -1
@@ -212,13 +265,13 @@ def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose
                 m = rng.choice(_CANDIDATES[last])
                 s = apply_move(s, MOVES[m])
                 last = m
+            start_states.append(s)
 
-            solved, n_moves, _ = greedy_solve(predict_fn, s)
-            if solved:
-                solved_count += 1
-                move_lengths.append(n_moves)
+        # Solve all trials in one batched call per greedy step
+        solved_arr, n_moves_arr = _greedy_solve_batch(predict_fn, start_states)
 
-        solve_rate = solved_count / n_trials
+        solve_rate = float(solved_arr.mean())
+        move_lengths = n_moves_arr[solved_arr].tolist()
         mean_moves = float(np.mean(move_lengths)) if move_lengths else float("nan")
         mean_excess = mean_moves - depth if move_lengths else float("nan")
 

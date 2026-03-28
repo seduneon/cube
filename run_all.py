@@ -242,16 +242,10 @@ def main():
     step_verify_env()
     step_verify_group()
 
-    if not args.skip_data and not args.skip_train:
+    if not args.skip_data:
         dist_table, move_table = step_bfs(args.skip_bfs)
     else:
         dist_table, move_table = None, None
-
-    if dist_table is None and not args.skip_data and not args.skip_train:
-        # Need to load BFS tables even if skipping BFS generation
-        from dataset import load_bfs_tables, bfs_tables_exist
-        if bfs_tables_exist():
-            dist_table, move_table = load_bfs_tables()
 
     train_sizes = step_generate_data(
         dist_table, args.skip_data, args.quick, custom_sizes)
