@@ -32,8 +32,8 @@ MAX_EPOCHS = 200
 EARLY_STOP_PATIENCE = 20
 LR_INIT = 3e-4
 LR_MIN = 1e-5
-CH_EMLP = 16   # c_hidden per position; 24 × 16 = 384 effective features
-CH_MLP  = 384  # hidden_dim for unconstrained MLP baseline
+CH_EMLP = 84   # c_hidden; gives ~351K params — matches MLP for fair comparison
+CH_MLP  = 384  # hidden_dim; gives ~351K params
 NUM_LAYERS = 3
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]

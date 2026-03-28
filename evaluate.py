@@ -33,7 +33,7 @@ MAX_DISTANCE = 14
 
 # ─── Load model checkpoint ────────────────────────────────────────────────────
 
-def load_checkpoint(model_type, train_size, seed):
+def load_checkpoint(model_type, train_size, seed, verbose=True):
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
     ckpt_path = os.path.join(CKPT_DIR, f"{label}.pt")
     if not os.path.exists(ckpt_path):
@@ -41,6 +41,9 @@ def load_checkpoint(model_type, train_size, seed):
     model = load_model(model_type, ckpt_path)
     model = model.to(DEVICE)
     model.eval()
+    if verbose:
+        n_params = get_param_count(model)
+        print(f"  Loaded {label}  ({n_params:,} params)")
     return model
 
 
@@ -444,7 +447,7 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
 
                     print("  Greedy solve rate...")
                     solve_res = evaluate_solve_rate(
-                        predict_fn, n_trials=500, beam_width=5, verbose=True)
+                        predict_fn, n_trials=500, beam_width=20, verbose=True)
                     for depth, res in solve_res.items():
                         solve_results[depth][model_type] = res
 
@@ -462,18 +465,21 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
     if solve_results:
         save_solve_rate_table(solve_results)
 
-    print("\nParameter efficiency:")
-    for model_type in ["emlp", "mlp"]:
-        try:
-            model = load_checkpoint(model_type, train_size_for_detail, 0)
-            n_params = get_param_count(model)
-            mae = val_metrics.get(model_type, {}).get("mae", float("nan"))
-            if n_params > 0:
-                efficiency = mae / n_params * 1e6
-                print(f"  {model_type.upper()}: {n_params:,} params, "
-                      f"MAE={mae:.4f}, MAE per 1M params={efficiency:.4f}")
-        except Exception:
-            pass
+    if val_metrics:
+        print("\nSummary:")
+        print(f"  {'Model':<6}  {'Params':>10}  {'MAE':>8}  {'Rounded Acc':>12}  {'Pearson r':>10}")
+        print(f"  {'-'*52}")
+        for model_type in ["emlp", "mlp"]:
+            if model_type not in val_metrics:
+                continue
+            try:
+                model = load_checkpoint(model_type, train_size_for_detail, 0, verbose=False)
+                n_params = get_param_count(model)
+            except Exception:
+                n_params = 0
+            m = val_metrics[model_type]
+            print(f"  {model_type.upper():<6}  {n_params:>10,}  {m['mae']:>8.4f}"
+                  f"  {m['rounded_accuracy']:>11.1%}  {m['correlation']:>10.4f}")
 
     print("\nEvaluation complete. Plots saved to:", PLOT_DIR)
 
