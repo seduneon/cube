@@ -65,16 +65,8 @@ def step_verify_env():
 
 def step_verify_group():
     section("Step 2: Verify rotation group")
-    from cube_group import verify_rotation_group, EMLP_AVAILABLE
+    from cube_group import verify_rotation_group
     verify_rotation_group()
-    if not EMLP_AVAILABLE:
-        print("\nWARNING: emlp is not installed!")
-        print("Install with one of:")
-        print("  pip install emlp")
-        print("  pip install 'jax[cpu]' objax emlp")
-        print("\nContinuing to verify other steps...")
-    else:
-        print("emlp available.")
 
 
 def step_bfs(skip_bfs):
@@ -158,12 +150,6 @@ def step_generate_data(dist_table, skip_data, quick, train_sizes=None):
 
 def step_train(skip_train, model_filter, quick, train_sizes, num_seeds=None):
     section("Step 5: Train models")
-    from models import EMLP_AVAILABLE
-    if not EMLP_AVAILABLE:
-        print("emlp not installed — skipping training.")
-        print("Install emlp and re-run with --skip-bfs --skip-data")
-        return
-
     from train import train_one, SEEDS, size_label
     import train as train_module
 
@@ -202,11 +188,6 @@ def step_train(skip_train, model_filter, quick, train_sizes, num_seeds=None):
 
 def step_evaluate(eval_size, train_sizes):
     section("Step 6: Evaluate and generate plots")
-    from models import EMLP_AVAILABLE
-    if not EMLP_AVAILABLE:
-        print("emlp not installed — skipping evaluation.")
-        return
-
     from evaluate import run_full_evaluation
     try:
         run_full_evaluation(train_size_for_detail=eval_size, train_sizes=train_sizes)
