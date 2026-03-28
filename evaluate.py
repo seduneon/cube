@@ -19,7 +19,7 @@ from cube_env import (
 from cube_group import ALL_ROTATIONS, apply_rotation
 from models import (
     build_emlp_model, build_mlp_model, load_model,
-    get_param_count, EMLP_AVAILABLE, DEVICE,
+    get_param_count, DEVICE,
 )
 from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist, _CANDIDATES
 from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SEEDS, size_label

@@ -17,7 +17,8 @@ import torch
 
 from models import (
     build_emlp_model, build_mlp_model, cosine_decay_lr,
-    save_model, load_model, get_param_count, EMLP_AVAILABLE, DEVICE,
+    save_model, load_model, get_param_count, densify_emlp_model,
+    DEVICE,
 )
 from dataset import load_dataset, DATA_DIR
 
@@ -26,12 +27,13 @@ CKPT_DIR = os.path.join(RESULTS_DIR, "checkpoints")
 LOG_DIR = os.path.join(RESULTS_DIR, "logs")
 
 # ─── Hyperparameters ──────────────────────────────────────────────────────────
-BATCH_SIZE = 256
+BATCH_SIZE = 1024
 MAX_EPOCHS = 200
 EARLY_STOP_PATIENCE = 20
 LR_INIT = 3e-4
 LR_MIN = 1e-5
-CH = 384
+CH_EMLP = 16   # c_hidden per position; 24 × 16 = 384 effective features
+CH_MLP  = 384  # hidden_dim for unconstrained MLP baseline
 NUM_LAYERS = 3
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]
@@ -86,9 +88,9 @@ def train_one(model_type, train_size, seed, verbose=True):
 
     # ── Model ────────────────────────────────────────────────────────────────
     if model_type == "emlp":
-        model, G, _, _ = build_emlp_model(ch=CH, num_layers=NUM_LAYERS)
+        model, G, _, _ = build_emlp_model(ch=CH_EMLP, num_layers=NUM_LAYERS)
     else:
-        model, G, _, _ = build_mlp_model(ch=CH, num_layers=NUM_LAYERS)
+        model, G, _, _ = build_mlp_model(ch=CH_MLP, num_layers=NUM_LAYERS)
 
     model = model.to(DEVICE)
     n_params = get_param_count(model)
@@ -189,10 +191,6 @@ def train_one(model_type, train_size, seed, verbose=True):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    if not EMLP_AVAILABLE:
-        print("ERROR: emlp not installed. Run: pip install emlp")
-        return
-
     parser = argparse.ArgumentParser(description="Train EMLP/MLP on 2x2x2 cube.")
     parser.add_argument("--model", choices=["emlp", "mlp", "all"], default="all")
     parser.add_argument("--size", choices=["50k", "200k", "1m", "all"], default="all")
