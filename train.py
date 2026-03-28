@@ -47,7 +47,8 @@ def size_label(n):
 
 
 def load_split(split, n_train=None):
-    return load_dataset(split, n_train)
+    stratified = (split == "train" and n_train is not None)
+    return load_dataset(split, n_train, stratified=stratified)
 
 
 def make_batches(X, y, batch_size, rng):
@@ -67,6 +68,11 @@ def train_one(model_type, train_size, seed, verbose=True):
     log_path = os.path.join(LOG_DIR, f"{label}.csv")
     os.makedirs(CKPT_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
+
+    if os.path.exists(ckpt_path):
+        if verbose:
+            print(f"Checkpoint already exists, skipping: {ckpt_path}")
+        return None, None
 
     if verbose:
         print(f"\n{'='*60}")
@@ -209,7 +215,8 @@ def main():
             for seed in seeds:
                 config_key = f"{model_type}_{size_label(train_size)}_seed{seed}"
                 best_val_mse, _ = train_one(model_type, train_size, seed, verbose=True)
-                results[config_key] = best_val_mse
+                if best_val_mse is not None:
+                    results[config_key] = best_val_mse
 
     print("\n" + "=" * 60)
     print("TRAINING SUMMARY")

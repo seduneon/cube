@@ -155,6 +155,53 @@ def generate_dataset(n_samples, dist_table, rng=None,
     return X, y_dist
 
 
+def generate_train_dataset_stratified(n_total, dist_table, rng=None, verbose=True):
+    """Generate a training set with equal samples per BFS depth (1–14).
+
+    Samples n_total // 14 states from each depth bucket.  Depths with fewer
+    states than required are oversampled with replacement (only depths 1–3
+    are small enough to trigger this).  The result is shuffled.
+
+    This eliminates the bias of random scrambling, which heavily undersamples
+    the hardest states (depth 13–14) because long scrambles often cancel out.
+    """
+    if rng is None:
+        rng = np.random.RandomState(42)
+
+    # Index states by exact BFS depth (skip depth 0 — the solved state)
+    states_by_depth = {d: [] for d in range(1, MAX_DISTANCE + 1)}
+    iterator = tqdm(dist_table.items(), total=len(dist_table),
+                    desc="Indexing BFS table", disable=not verbose)
+    for state_t, d in iterator:
+        if 1 <= d <= MAX_DISTANCE:
+            states_by_depth[d].append(state_t)
+
+    n_depths = MAX_DISTANCE  # 14 depth levels
+    n_per_depth = n_total // n_depths
+    remainder = n_total - n_per_depth * n_depths  # distribute among deepest levels
+
+    X_list, y_list = [], []
+    for d in range(1, MAX_DISTANCE + 1):
+        pool = states_by_depth[d]
+        # give remainder samples to the deepest depths
+        n = n_per_depth + (1 if d > MAX_DISTANCE - remainder else 0)
+        replace = len(pool) < n  # oversample only if pool too small (depths 1–3)
+        indices = rng.choice(len(pool), size=n, replace=replace)
+        for i in indices:
+            state = tuple_to_state(pool[i])
+            X_list.append(encode_state(state))
+            y_list.append(d)
+        if verbose:
+            print(f"  depth {d:2d}: {len(pool):>8,} states, sampled {n}"
+                  + (" (with replacement)" if replace else ""))
+
+    # Shuffle so depth order doesn't affect training
+    idx = rng.permutation(len(X_list))
+    X = np.array(X_list, dtype=np.float32)[idx]
+    y = np.array(y_list, dtype=np.int32)[idx]
+    return X, y
+
+
 def generate_test_dataset_stratified(n_per_depth, dist_table,
                                      rng=None, verbose=True):
     """Generate a test set stratified by depth (roughly n_per_depth per depth).
@@ -192,23 +239,44 @@ def generate_test_dataset_stratified(n_per_depth, dist_table,
     return X, y_dist
 
 
-def save_dataset(X, y_dist, split_name, n_train=None):
+def load_dataset(split_name, n_train=None, stratified=False):
+    """Load dataset arrays from disk.
+
+    If stratified=True and the stratified file doesn't exist yet, it is
+    generated from the BFS table and cached for future runs.
+    """
+    suffix = f"_{n_train // 1000}k" if n_train is not None else ""
+    strat_suffix = "_strat" if stratified else ""
+    tag = f"{split_name}{suffix}{strat_suffix}"
+
+    x_path = os.path.join(DATA_DIR, f"X_{tag}.npy")
+    y_path = os.path.join(DATA_DIR, f"y_dist_{tag}.npy")
+
+    if not os.path.exists(x_path):
+        if stratified and split_name == "train" and n_train is not None:
+            print(f"Stratified train file not found — generating from BFS table...")
+            dist_table, _ = load_bfs_tables()
+            rng = np.random.RandomState(300 + n_train)
+            X, y_dist = generate_train_dataset_stratified(
+                n_train, dist_table, rng=rng, verbose=True)
+            save_dataset(X, y_dist, split_name, n_train, stratified=True)
+        else:
+            raise FileNotFoundError(f"Dataset file not found: {x_path}")
+
+    X = np.load(x_path)
+    y_dist = np.load(y_path)
+    return X, y_dist
+
+
+def save_dataset(X, y_dist, split_name, n_train=None, stratified=False):
     """Save dataset arrays to disk."""
     os.makedirs(DATA_DIR, exist_ok=True)
     suffix = f"_{n_train // 1000}k" if n_train is not None else ""
-    tag = f"{split_name}{suffix}"
+    strat_suffix = "_strat" if stratified else ""
+    tag = f"{split_name}{suffix}{strat_suffix}"
     np.save(os.path.join(DATA_DIR, f"X_{tag}.npy"), X)
     np.save(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"), y_dist)
     print(f"Saved {tag}: X={X.shape}, y_dist={y_dist.shape}")
-
-
-def load_dataset(split_name, n_train=None):
-    """Load dataset arrays from disk."""
-    suffix = f"_{n_train // 1000}k" if n_train is not None else ""
-    tag = f"{split_name}{suffix}"
-    X = np.load(os.path.join(DATA_DIR, f"X_{tag}.npy"))
-    y_dist = np.load(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"))
-    return X, y_dist
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
