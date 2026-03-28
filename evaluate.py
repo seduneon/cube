@@ -397,10 +397,6 @@ def save_solve_rate_table(solve_results, path=None):
 # ─── Full evaluation run ──────────────────────────────────────────────────────
 
 def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
-    if not EMLP_AVAILABLE:
-        print("emlp not available.")
-        return
-
     if train_sizes is None:
         train_sizes = TRAIN_SIZES
     if train_size_for_detail not in train_sizes:
