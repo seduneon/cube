@@ -75,7 +75,7 @@ def train_one(model_type, train_size, seed, verbose=True):
     import objax
 
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
-    ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
+    ckpt_path = os.path.join(CKPT_DIR, f"{label}.pkl")
     log_path = os.path.join(LOG_DIR, f"{label}.csv")
     os.makedirs(CKPT_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -129,8 +129,10 @@ def train_one(model_type, train_size, seed, verbose=True):
         opt(lr=lr, grads=g)
         return v[0]
 
-    train_step = objax.Jit(train_step, opt_vars)
-    val_loss_fn = objax.Jit(val_loss_fn, model.vars())
+    # objax.Jit is intentionally removed — broken in JAX >= 0.4.26 (returns
+    # wrong values for ALL return types, causing gradients to be wrong).
+    # JAX will still compile XLA kernels on first call; only Python overhead
+    # increases (~2–3× slower per epoch, but results are correct).
 
     # ── Training loop ────────────────────────────────────────────────────────
     total_steps = MAX_EPOCHS * (len(X_train) // BATCH_SIZE)

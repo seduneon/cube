@@ -48,29 +48,23 @@ MAX_DISTANCE = 14  # QTM with R,R',U,U',F,F' quarter turns
 def load_checkpoint(model_type, train_size, seed):
     """Load a model from its best checkpoint."""
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
-    ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
+    ckpt_path = os.path.join(CKPT_DIR, f"{label}.pkl")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
-    if model_type == "emlp":
-        model, G, _, _ = build_emlp_model()
-    else:
-        model, G, _, _ = build_mlp_model()
-
-    load_model(model, ckpt_path)
+    # load_model restores the full object (weights + EMLP basis matrices).
+    # No need to build a fresh model first.
+    model = load_model(ckpt_path)
     return model
 
 
 def make_predict_fn(model):
     """Create a predict function. Call once per model instance.
 
-    Note: objax.Jit is intentionally not used here — it does not correctly
-    return arrays (only scalars) in JAX >= 0.4.26. Training is unaffected
-    because its JIT functions return scalars (loss values).
+    Note: objax.Jit and objax.Function.with_vars are intentionally avoided —
+    both can return wrong values for array (non-scalar) outputs in JAX >= 0.4.26.
+    Calling the model directly as a Python callable works correctly.
     """
-    import objax
-
-    @objax.Function.with_vars(model.vars())
     def _predict(x):
         return model(x, training=False).squeeze()
 
@@ -194,59 +188,83 @@ def greedy_solve(predict_fn, initial_state, max_steps=50):
     return is_solved(state), len(move_sequence), move_sequence
 
 
-def _greedy_solve_batch(predict_fn, initial_states, max_steps=50):
-    """Greedy solve for a batch of states with one forward pass per step.
+def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
+    """Beam search for a batch of states.
 
-    Batches all n_trials × 6 neighbours into a single model call per step,
-    avoiding the per-trial overhead of the serial version.
+    At each step, expands all states in each trial's beam, scores all
+    beam_width × NUM_MOVES candidates in one batched forward pass, and
+    keeps the top-beam_width states (lowest predicted distance).
 
     Returns (solved: bool array, n_moves: int array)
     """
-    import jax.numpy as jnp
-
     n = len(initial_states)
-    states = [s.copy() for s in initial_states]
     solved = np.zeros(n, dtype=bool)
-    n_moves = np.full(n, max_steps, dtype=int)
+    n_moves_out = np.full(n, max_steps, dtype=int)
+
+    # beams[i] = list of (state, depth_so_far)
+    beams = [[(s.copy(), 0)] for s in initial_states]
 
     for step in range(max_steps):
-        # Mark any newly solved states
+        # Check for solved states in any beam position
         for i in range(n):
-            if not solved[i] and is_solved(states[i]):
-                solved[i] = True
-                n_moves[i] = step
+            if solved[i]:
+                continue
+            for state, depth in beams[i]:
+                if is_solved(state):
+                    solved[i] = True
+                    n_moves_out[i] = depth
+                    break
 
         active = np.where(~solved)[0]
         if len(active) == 0:
             break
 
-        # One batched forward pass for all active trials × 6 neighbours
-        all_next = np.array([
-            encode_state(apply_move(states[i], MOVES[m]))
-            for i in active
-            for m in range(NUM_MOVES)
-        ], dtype=np.float32)
+        # Expand all beam states for all active trials and batch-encode
+        expanded = []   # list-of-lists: expanded[idx] = candidates for active[idx]
+        all_encoded = []
 
-        preds = np.array(predict_fn(jnp.array(all_next)))  # (n_active * 6,)
-        preds = preds.reshape(len(active), NUM_MOVES)
-        best_moves = np.argmin(preds, axis=1)
+        for i in active:
+            trial_cands = []
+            for state, depth in beams[i]:
+                for m in range(NUM_MOVES):
+                    ns = apply_move(state, MOVES[m])
+                    trial_cands.append((ns, depth + 1))
+                    all_encoded.append(encode_state(ns))
+            expanded.append(trial_cands)
 
-        for j, i in enumerate(active):
-            states[i] = apply_move(states[i], MOVES[best_moves[j]])
+        # One batched prediction for all candidates across all active trials
+        preds = model_predict(predict_fn, np.array(all_encoded, dtype=np.float32))
+
+        # Update each active trial's beam: keep top beam_width candidates
+        offset = 0
+        for idx, i in enumerate(active):
+            cands = expanded[idx]
+            count = len(cands)
+            trial_preds = preds[offset:offset + count]
+            offset += count
+
+            top_k = min(beam_width, count)
+            top_indices = np.argpartition(trial_preds, top_k - 1)[:top_k]
+            beams[i] = [cands[j] for j in top_indices]
 
     # Final solved check
     for i in range(n):
-        if not solved[i] and is_solved(states[i]):
-            solved[i] = True
-            n_moves[i] = max_steps
+        if not solved[i]:
+            for state, depth in beams[i]:
+                if is_solved(state):
+                    solved[i] = True
+                    n_moves_out[i] = depth
+                    break
 
-    return solved, n_moves
+    return solved, n_moves_out
 
 
-def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose=True):
-    """Evaluate greedy solve rate at various scramble depths.
+def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
+                        beam_width=5, verbose=True):
+    """Evaluate beam-search solve rate at various scramble depths.
 
     predict_fn: predict function from make_predict_fn().
+    beam_width:  number of states kept per step (1 = greedy).
     Returns dict: depth -> {solve_rate, mean_moves, mean_excess}
     """
     if scramble_depths is None:
@@ -256,7 +274,6 @@ def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose
     rng = np.random.RandomState(42)
 
     for depth in scramble_depths:
-        # Generate all start states upfront
         start_states = []
         for _ in range(n_trials):
             s = SOLVED_STATE.copy()
@@ -267,8 +284,8 @@ def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose
                 last = m
             start_states.append(s)
 
-        # Solve all trials in one batched call per greedy step
-        solved_arr, n_moves_arr = _greedy_solve_batch(predict_fn, start_states)
+        solved_arr, n_moves_arr = _beam_search_batch(
+            predict_fn, start_states, beam_width=beam_width)
 
         solve_rate = float(solved_arr.mean())
         move_lengths = n_moves_arr[solved_arr].tolist()
@@ -527,7 +544,8 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
                     print(f"  Pearson r: {metrics['correlation']:.4f}")
 
                     print("  Greedy solve rate...")
-                    solve_res = evaluate_solve_rate(predict_fn, n_trials=500, verbose=True)
+                    solve_res = evaluate_solve_rate(
+                        predict_fn, n_trials=500, beam_width=5, verbose=True)
                     for depth, res in solve_res.items():
                         solve_results[depth][model_type] = res
 

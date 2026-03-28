@@ -131,20 +131,26 @@ def cosine_decay_lr(step, total_steps, lr_init=3e-4, lr_min=1e-5):
 
 
 def save_model(model, path):
-    """Save model parameters to a .npz file."""
-    import objax
-    np.savez(path, **{k: v.value for k, v in model.vars().items()})
+    """Save the full model object (weights + EMLP basis matrices) via pickle.
+
+    npz only captures objax TrainVars; EMLP also stores equivariant basis
+    matrices (Pw) as plain Python attributes outside the var system. Pickling
+    the whole object preserves everything, making load deterministic.
+    """
+    import pickle
+    with open(path, "wb") as f:
+        pickle.dump(model, f)
 
 
-def load_model(model, path):
-    """Load model parameters from a .npz file."""
-    import jax.numpy as jnp
-    data = np.load(path)
-    for k, v in model.vars().items():
-        if k in data:
-            v.assign(jnp.array(data[k]))
-        else:
-            print(f"Warning: key {k} not found in checkpoint")
+def load_model(path):
+    """Load and return a model from a pickle checkpoint.
+
+    Returns the restored model object. The caller should discard any
+    freshly-built model and use the returned one instead.
+    """
+    import pickle
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
 
 # ─── Main: print model info ───────────────────────────────────────────────────
