@@ -18,6 +18,13 @@ from cube_env import (
     apply_move, encode_state, state_to_tuple, tuple_to_state,
 )
 
+# Pre-computed move candidates for each last_move value (-1 = no last move).
+# Avoids rebuilding the list comprehension on every scramble step.
+_CANDIDATES: dict = {-1: list(range(NUM_MOVES))}
+_CANDIDATES.update(
+    {m: [i for i in range(NUM_MOVES) if i != INVERSE_MOVE[m]] for m in range(NUM_MOVES)}
+)
+
 # Expected number of reachable states (God's number = 14 in QTM with R,U,F quarter turns)
 TOTAL_STATES = 3_674_160
 MAX_DISTANCE = 14  # God's number in QTM (we use only R,R',U,U',F,F' quarter turns)
@@ -137,9 +144,7 @@ def generate_dataset(n_samples, dist_table, rng=None,
 
         last_move = -1
         for _ in range(k):
-            candidates = [m for m in range(NUM_MOVES) if m != INVERSE_MOVE[last_move]] \
-                if last_move >= 0 else list(range(NUM_MOVES))
-            move = rng.choice(candidates)
+            move = rng.choice(_CANDIDATES[last_move])
             state = apply_move(state, MOVES[move])
             last_move = move
 

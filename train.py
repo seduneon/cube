@@ -138,6 +138,11 @@ def train_one(model_type, train_size, seed, verbose=True):
     best_val_mse = float("inf")
     patience_counter = 0
     rng = np.random.RandomState(seed + 1000)
+    lr = LR_INIT  # will be updated each step
+
+    # Pre-place validation data on device once to avoid per-epoch transfers
+    X_val_d = jnp.array(X_val)
+    y_val_d = jnp.array(y_val)
 
     log_rows = []
 
@@ -160,15 +165,15 @@ def train_one(model_type, train_size, seed, verbose=True):
         for start in range(0, len(X_val), BATCH_SIZE * 4):
             end = min(start + BATCH_SIZE * 4, len(X_val))
             vl = val_loss_fn(
-                jnp.array(X_val[start:end]),
-                jnp.array(y_val[start:end]),
+                X_val_d[start:end],
+                y_val_d[start:end],
             )
             val_losses.append(float(vl))
 
         train_mse = float(np.mean(train_losses))
         val_mse = float(np.mean(val_losses))
         wall_time = time.time() - t0
-        lr_now = cosine_decay_lr(step, total_steps, LR_INIT, LR_MIN)
+        lr_now = lr  # reuse last step's lr, no redundant recompute
 
         log_rows.append({
             "epoch": epoch,

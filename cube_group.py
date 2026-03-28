@@ -164,6 +164,10 @@ def verify_rotation_group():
     return elements
 
 
+# Module-level cache: all 24 rotation group elements (computed once at import)
+ALL_ROTATIONS = enumerate_group_elements(X_ROT_PERM, Y_ROT_PERM)
+
+
 def apply_rotation(perm: np.ndarray, state: np.ndarray) -> np.ndarray:
     """Apply a rotation permutation to a cube state.
 

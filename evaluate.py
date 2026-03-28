@@ -28,12 +28,12 @@ from cube_env import (
     SOLVED_STATE, MOVES, MOVE_NAMES, INVERSE_MOVE, NUM_MOVES,
     apply_move, encode_state, is_solved, state_to_tuple, tuple_to_state, scramble,
 )
-from cube_group import enumerate_group_elements, X_ROT_PERM, Y_ROT_PERM, apply_rotation
+from cube_group import ALL_ROTATIONS, apply_rotation
 from models import (
     build_emlp_model, build_mlp_model, load_model,
     get_param_count, EMLP_AVAILABLE,
 )
-from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist
+from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist, _CANDIDATES
 from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SEEDS, size_label
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
@@ -61,16 +61,20 @@ def load_checkpoint(model_type, train_size, seed):
     return model
 
 
-def model_predict(model, X_np):
-    """Run forward pass on numpy array X, return numpy predictions."""
-    import jax.numpy as jnp
+def make_predict_fn(model):
+    """Create a JIT-compiled predict function. Call once per model instance."""
     import objax
 
     @objax.Function.with_vars(model.vars())
-    def predict_fn(x):
+    def _predict(x):
         return model(x, training=False).squeeze()
 
-    predict_fn = objax.Jit(predict_fn, model.vars())
+    return objax.Jit(_predict, model.vars())
+
+
+def model_predict(predict_fn, X_np):
+    """Run forward pass on numpy array X, return numpy predictions."""
+    import jax.numpy as jnp
 
     batch_size = 512
     preds = []
@@ -82,21 +86,13 @@ def model_predict(model, X_np):
 
 # ─── Metric 1: Equivariance Error ─────────────────────────────────────────────
 
-def equivariance_error(model, X_test, n_rotations=10, n_states=500):
+def equivariance_error(predict_fn, X_test, n_rotations=10, n_states=500):
     """Compute mean |f(g·x) - f(x)| over random states and rotations.
 
     For a truly invariant model, this should be ~1e-7 (float32 precision).
+    predict_fn: JIT-compiled predict function from make_predict_fn().
     """
     import jax.numpy as jnp
-    import objax
-
-    @objax.Function.with_vars(model.vars())
-    def predict_fn(x):
-        return model(x, training=False).squeeze()
-
-    predict_fn = objax.Jit(predict_fn, model.vars())
-
-    all_rotations = enumerate_group_elements(X_ROT_PERM, Y_ROT_PERM)
 
     # Sample random states from test set
     actual_states = min(n_states, len(X_test))
@@ -107,10 +103,10 @@ def equivariance_error(model, X_test, n_rotations=10, n_states=500):
     # X has shape (actual_states, 144), each row is a 24x6 one-hot flattened
     states_sample = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)  # (actual_states, 24)
 
-    # Sample n_rotations random rotations
-    actual_rotations = min(n_rotations, len(all_rotations))
-    rot_indices = np.random.choice(len(all_rotations), size=actual_rotations, replace=False)
-    rotations = [all_rotations[i] for i in rot_indices]
+    # Sample n_rotations random rotations from the cached group
+    actual_rotations = min(n_rotations, len(ALL_ROTATIONS))
+    rot_indices = np.random.choice(len(ALL_ROTATIONS), size=actual_rotations, replace=False)
+    rotations = [ALL_ROTATIONS[i] for i in rot_indices]
 
     errors = []
     f_original = np.array(predict_fn(jnp.array(X_sample)))  # (n_states,)
@@ -130,12 +126,13 @@ def equivariance_error(model, X_test, n_rotations=10, n_states=500):
 
 # ─── Metric 2: Value Prediction Accuracy ─────────────────────────────────────
 
-def value_prediction_metrics(model, X_test, y_test):
+def value_prediction_metrics(predict_fn, X_test, y_test):
     """Compute value prediction metrics on the test set.
 
+    predict_fn: JIT-compiled predict function from make_predict_fn().
     Returns dict with: mae, per_depth_mae, correlation, rounded_accuracy
     """
-    preds = model_predict(model, X_test)
+    preds = model_predict(predict_fn, X_test)
     y_true = y_test.astype(np.float32)
 
     mae = float(np.mean(np.abs(preds - y_true)))
@@ -163,19 +160,13 @@ def value_prediction_metrics(model, X_test, y_test):
 
 # ─── Metric 3: Greedy Solve Rate ──────────────────────────────────────────────
 
-def greedy_solve(model, initial_state, max_steps=50):
+def greedy_solve(predict_fn, initial_state, max_steps=50):
     """Greedily solve the cube by picking the move with lowest predicted distance.
 
+    predict_fn: JIT-compiled predict function from make_predict_fn().
     Returns (solved: bool, n_moves: int, move_sequence: list)
     """
     import jax.numpy as jnp
-    import objax
-
-    @objax.Function.with_vars(model.vars())
-    def predict_fn(x):
-        return model(x, training=False).squeeze()
-
-    predict_fn = objax.Jit(predict_fn, model.vars())
 
     state = initial_state.copy()
     move_sequence = []
@@ -198,9 +189,10 @@ def greedy_solve(model, initial_state, max_steps=50):
     return is_solved(state), len(move_sequence), move_sequence
 
 
-def evaluate_solve_rate(model, n_trials=1000, scramble_depths=None, verbose=True):
+def evaluate_solve_rate(predict_fn, n_trials=1000, scramble_depths=None, verbose=True):
     """Evaluate greedy solve rate at various scramble depths.
 
+    predict_fn: JIT-compiled predict function from make_predict_fn().
     Returns dict: depth -> {solve_rate, mean_moves, mean_excess}
     """
     if scramble_depths is None:
@@ -214,19 +206,14 @@ def evaluate_solve_rate(model, n_trials=1000, scramble_depths=None, verbose=True
         move_lengths = []
 
         for _ in range(n_trials):
-            state, _ = scramble(SOLVED_STATE, depth,
-                                rng=type('R', (), {'choice': lambda self, x: rng.choice(x)})())
-            # Use numpy for scramble
             s = SOLVED_STATE.copy()
             last = -1
             for _k in range(depth):
-                cands = [m for m in range(NUM_MOVES) if m != INVERSE_MOVE[last]] \
-                    if last >= 0 else list(range(NUM_MOVES))
-                m = rng.choice(cands)
+                m = rng.choice(_CANDIDATES[last])
                 s = apply_move(s, MOVES[m])
                 last = m
 
-            solved, n_moves, _ = greedy_solve(model, s)
+            solved, n_moves, _ = greedy_solve(predict_fn, s)
             if solved:
                 solved_count += 1
                 move_lengths.append(n_moves)
@@ -445,6 +432,7 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
         train_size_for_detail = train_sizes[-1]
 
     X_test, y_test = load_dataset("test")
+    X_val, y_val = load_dataset("val")  # loaded once, reused across all models
     print(f"Test set: {X_test.shape}")
 
     all_val_mses = {}
@@ -457,35 +445,36 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
             for seed in SEEDS:
                 try:
                     m = load_checkpoint(model_type, train_size, seed)
-                    X_val, y_val = load_dataset("val")
-                    preds_val = model_predict(m, X_val)
+                    predict_fn_m = make_predict_fn(m)  # compiled once per model
+                    preds_val = model_predict(predict_fn_m, X_val)
                     val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
                     all_val_mses[(model_type, train_size, seed)] = val_mse
                 except Exception as e:
                     print(f"  Skip (no checkpoint): {e}")
                     pass
 
-            # Detailed metrics using 200K model, seed 0
+            # Detailed metrics using train_size_for_detail model, seed 0
             if train_size == train_size_for_detail:
                 try:
                     model = load_checkpoint(model_type, train_size, 0)
+                    predict_fn = make_predict_fn(model)  # compiled once, reused below
 
                     print(f"\n── {model_type.upper()} ({size_label(train_size)}) ──")
 
                     print("  Equivariance error...")
-                    eq_err, _ = equivariance_error(model, X_test)
+                    eq_err, _ = equivariance_error(predict_fn, X_test)
                     eq_errors[model_type] = eq_err
                     print(f"  Equivariance error: {eq_err:.2e}")
 
                     print("  Value prediction metrics...")
-                    metrics = value_prediction_metrics(model, X_test, y_test)
+                    metrics = value_prediction_metrics(predict_fn, X_test, y_test)
                     val_metrics[model_type] = metrics
                     print(f"  MAE: {metrics['mae']:.4f}")
                     print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
                     print(f"  Pearson r: {metrics['correlation']:.4f}")
 
                     print("  Greedy solve rate...")
-                    solve_res = evaluate_solve_rate(model, n_trials=500, verbose=True)
+                    solve_res = evaluate_solve_rate(predict_fn, n_trials=500, verbose=True)
                     for depth, res in solve_res.items():
                         solve_results[depth][model_type] = res
 
