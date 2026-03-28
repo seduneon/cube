@@ -104,13 +104,17 @@ def save_model(model, path):
 
 
 def load_model(model_type, path):
-    """Load model from checkpoint."""
+    """Load model from checkpoint, inferring architecture from saved weights."""
     path = str(path).replace('.npz', '.pt')
-    if model_type == 'emlp':
-        model, _, _, _ = build_emlp_model()
-    else:
-        model, _, _, _ = build_mlp_model()
     state = torch.load(path, map_location='cpu', weights_only=True)
+    if model_type == 'emlp':
+        # conv_layers.0.weight shape: (c_hidden, 6, 24)
+        c_hidden = state['conv_layers.0.weight'].shape[0]
+        model, _, _, _ = build_emlp_model(ch=c_hidden)
+    else:
+        # net.0.weight shape: (hidden_dim, 144)
+        hidden_dim = state['net.0.weight'].shape[0]
+        model, _, _, _ = build_mlp_model(ch=hidden_dim)
     model.load_state_dict(state)
     return model
 

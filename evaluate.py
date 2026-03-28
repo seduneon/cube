@@ -14,7 +14,7 @@ from collections import defaultdict
 
 from cube_env import (
     SOLVED_STATE, MOVES, MOVE_NAMES, INVERSE_MOVE, NUM_MOVES,
-    apply_move, encode_state, is_solved, state_to_tuple, tuple_to_state, scramble,
+    apply_move, encode_state, is_solved, state_to_tuple, tuple_to_state,
 )
 from cube_group import ALL_ROTATIONS, apply_rotation
 from models import (
@@ -194,23 +194,44 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
 
 
 def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
-                        beam_width=5, verbose=True):
+                        beam_width=20, verbose=True):
+    """Evaluate beam-search solve rate at exact BFS distances.
+
+    States are sampled from the BFS table so that each start state is
+    EXACTLY `depth` moves from solved — not just scrambled by `depth`
+    random moves (which often land much closer due to cancellations).
+    """
     if scramble_depths is None:
         scramble_depths = [4, 7, 10, 14]
+
+    if not bfs_tables_exist():
+        if verbose:
+            print("  BFS table not found — skipping solve rate evaluation.")
+        return {}
+
+    if verbose:
+        print("  Loading BFS table for exact-distance sampling...")
+    dist_table, _ = load_bfs_tables()
+
+    # Group all states by their exact BFS distance
+    from collections import defaultdict as _dd
+    states_by_depth = _dd(list)
+    for state_t, d in dist_table.items():
+        states_by_depth[d].append(state_t)
 
     results = {}
     rng = np.random.RandomState(42)
 
     for depth in scramble_depths:
-        start_states = []
-        for _ in range(n_trials):
-            s = SOLVED_STATE.copy()
-            last = -1
-            for _k in range(depth):
-                m = rng.choice(_CANDIDATES[last])
-                s = apply_move(s, MOVES[m])
-                last = m
-            start_states.append(s)
+        pool = states_by_depth.get(depth, [])
+        if not pool:
+            if verbose:
+                print(f"  depth={depth:2d}: no states at this exact distance")
+            continue
+
+        n = min(n_trials, len(pool))
+        indices = rng.choice(len(pool), size=n, replace=False)
+        start_states = [tuple_to_state(pool[i]) for i in indices]
 
         solved_arr, n_moves_arr = _beam_search_batch(
             predict_fn, start_states, beam_width=beam_width)
@@ -228,7 +249,8 @@ def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
 
         if verbose:
             print(f"  depth={depth:2d}: solve_rate={solve_rate:.1%}  "
-                  f"mean_moves={mean_moves:.1f}  excess={mean_excess:+.1f}")
+                  f"mean_moves={mean_moves:.1f}  excess={mean_excess:+.1f}"
+                  f"  (n={n})")
 
     return results
 
