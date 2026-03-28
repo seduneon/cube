@@ -1,8 +1,6 @@
 """
 Training loop for EMLP and MLP value networks on the 2x2x2 Pocket Cube.
-
-Trains both models across 3 dataset sizes × 3 seeds = 18 total runs.
-Saves best checkpoints (by validation MSE) and per-epoch logs.
+PyTorch backend — works on Kaggle without JAX version conflicts.
 
 Usage:
     python train.py                          # train all 18 configs
@@ -15,10 +13,11 @@ import csv
 import time
 import argparse
 import numpy as np
+import torch
 
 from models import (
     build_emlp_model, build_mlp_model, cosine_decay_lr,
-    save_model, load_model, get_param_count, EMLP_AVAILABLE,
+    save_model, load_model, get_param_count, EMLP_AVAILABLE, DEVICE,
 )
 from dataset import load_dataset, DATA_DIR
 
@@ -28,8 +27,8 @@ LOG_DIR = os.path.join(RESULTS_DIR, "logs")
 
 # ─── Hyperparameters ──────────────────────────────────────────────────────────
 BATCH_SIZE = 256
-MAX_EPOCHS = 100
-EARLY_STOP_PATIENCE = 10
+MAX_EPOCHS = 200
+EARLY_STOP_PATIENCE = 20
 LR_INIT = 3e-4
 LR_MIN = 1e-5
 CH = 384
@@ -40,13 +39,10 @@ SEEDS = [0, 1, 2]
 
 
 def size_label(n):
-    """Get a short label string for a training set size."""
     if n >= 1_000:
         return f"{n // 1000}k"
     return str(n)
 
-
-# ─── Data loading ─────────────────────────────────────────────────────────────
 
 def load_split(split, n_train=None):
     return load_dataset(split, n_train)
@@ -64,18 +60,8 @@ def make_batches(X, y, batch_size, rng):
 # ─── Training ─────────────────────────────────────────────────────────────────
 
 def train_one(model_type, train_size, seed, verbose=True):
-    """Train one (model_type, train_size, seed) configuration.
-
-    model_type: 'emlp' or 'mlp'
-    train_size: number of training samples (e.g., 50000)
-    seed:       random seed (0, 1, or 2)
-    """
-    import jax
-    import jax.numpy as jnp
-    import objax
-
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
-    ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
+    ckpt_path = os.path.join(CKPT_DIR, f"{label}.pt")
     log_path = os.path.join(LOG_DIR, f"{label}.csv")
     os.makedirs(CKPT_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -83,11 +69,11 @@ def train_one(model_type, train_size, seed, verbose=True):
     if verbose:
         print(f"\n{'='*60}")
         print(f"Training: {label}")
+        print(f"Device:   {DEVICE}")
         print(f"{'='*60}")
 
-    # ── Seeding ──────────────────────────────────────────────────────────────
+    torch.manual_seed(seed)
     np.random.seed(seed)
-    key = jax.random.PRNGKey(seed)
 
     # ── Data ─────────────────────────────────────────────────────────────────
     X_train, y_train = load_split("train", train_size)
@@ -104,35 +90,16 @@ def train_one(model_type, train_size, seed, verbose=True):
     else:
         model, G, _, _ = build_mlp_model(ch=CH, num_layers=NUM_LAYERS)
 
+    model = model.to(DEVICE)
     n_params = get_param_count(model)
     if verbose:
         print(f"Parameters: {n_params:,}")
 
-    # ── Loss and optimizer ───────────────────────────────────────────────────
-    @objax.Function.with_vars(model.vars())
-    def loss_fn(x, y):
-        pred = model(x, training=True)
-        return jnp.mean((pred.squeeze() - y) ** 2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR_INIT)
 
-    @objax.Function.with_vars(model.vars())
-    def val_loss_fn(x, y):
-        pred = model(x, training=False)
-        return jnp.mean((pred.squeeze() - y) ** 2)
-
-    grad_fn = objax.GradValues(loss_fn, model.vars())
-    opt = objax.optimizer.Adam(model.vars())
-    opt_vars = model.vars() + opt.vars()
-
-    @objax.Function.with_vars(opt_vars)
-    def train_step(x, y, lr):
-        g, v = grad_fn(x, y)
-        opt(lr=lr, grads=g)
-        return v[0]
-
-    # objax.Jit is intentionally removed — broken in JAX >= 0.4.26 (returns
-    # wrong values for ALL return types, causing gradients to be wrong).
-    # JAX will still compile XLA kernels on first call; only Python overhead
-    # increases (~2–3× slower per epoch, but results are correct).
+    # Pre-place validation data on device
+    X_val_t = torch.tensor(X_val, dtype=torch.float32, device=DEVICE)
+    y_val_t = torch.tensor(y_val, dtype=torch.float32, device=DEVICE)
 
     # ── Training loop ────────────────────────────────────────────────────────
     total_steps = MAX_EPOCHS * (len(X_train) // BATCH_SIZE)
@@ -140,42 +107,44 @@ def train_one(model_type, train_size, seed, verbose=True):
     best_val_mse = float("inf")
     patience_counter = 0
     rng = np.random.RandomState(seed + 1000)
-    lr = LR_INIT  # will be updated each step
-
-    # Pre-place validation data on device once to avoid per-epoch transfers
-    X_val_d = jnp.array(X_val)
-    y_val_d = jnp.array(y_val)
-
     log_rows = []
 
     for epoch in range(MAX_EPOCHS):
         t0 = time.time()
+        model.train()
         train_losses = []
 
         for x_batch, y_batch in make_batches(X_train, y_train, BATCH_SIZE, rng):
             lr = cosine_decay_lr(step, total_steps, LR_INIT, LR_MIN)
-            loss = train_step(
-                jnp.array(x_batch),
-                jnp.array(y_batch),
-                lr=lr,
-            )
-            train_losses.append(float(loss))
+            for pg in optimizer.param_groups:
+                pg['lr'] = lr
+
+            x_t = torch.tensor(x_batch, dtype=torch.float32, device=DEVICE)
+            y_t = torch.tensor(y_batch, dtype=torch.float32, device=DEVICE)
+
+            optimizer.zero_grad()
+            pred = model(x_t).squeeze()
+            loss = ((pred - y_t) ** 2).mean()
+            loss.backward()
+            optimizer.step()
+
+            train_losses.append(loss.item())
             step += 1
 
         # ── Validation ───────────────────────────────────────────────────────
+        model.eval()
         val_losses = []
-        for start in range(0, len(X_val), BATCH_SIZE * 4):
-            end = min(start + BATCH_SIZE * 4, len(X_val))
-            vl = val_loss_fn(
-                X_val_d[start:end],
-                y_val_d[start:end],
-            )
-            val_losses.append(float(vl))
+        with torch.no_grad():
+            for start in range(0, len(X_val), BATCH_SIZE * 4):
+                end = min(start + BATCH_SIZE * 4, len(X_val))
+                pred_v = model(X_val_t[start:end]).squeeze()
+                vl = ((pred_v - y_val_t[start:end]) ** 2).mean()
+                val_losses.append(vl.item())
 
         train_mse = float(np.mean(train_losses))
         val_mse = float(np.mean(val_losses))
         wall_time = time.time() - t0
-        lr_now = lr  # reuse last step's lr, no redundant recompute
+        lr_now = cosine_decay_lr(step, total_steps, LR_INIT, LR_MIN)
 
         log_rows.append({
             "epoch": epoch,
@@ -221,9 +190,7 @@ def train_one(model_type, train_size, seed, verbose=True):
 
 def main():
     if not EMLP_AVAILABLE:
-        print("ERROR: emlp not installed.")
-        print("Install with: pip install emlp")
-        print("Or: pip install 'jax[cpu]==0.4.13' jaxlib==0.4.13 objax emlp")
+        print("ERROR: emlp not installed. Run: pip install emlp")
         return
 
     parser = argparse.ArgumentParser(description="Train EMLP/MLP on 2x2x2 cube.")
@@ -233,20 +200,11 @@ def main():
                         help="-1 means all seeds")
     args = parser.parse_args()
 
-    # Resolve model types
     model_types = ["emlp", "mlp"] if args.model == "all" else [args.model]
-
-    # Resolve train sizes
     size_map = {"50k": 50_000, "200k": 200_000, "1m": 1_000_000}
-    if args.size == "all":
-        train_sizes = TRAIN_SIZES
-    else:
-        train_sizes = [size_map[args.size]]
-
-    # Resolve seeds
+    train_sizes = TRAIN_SIZES if args.size == "all" else [size_map[args.size]]
     seeds = SEEDS if args.seed == -1 else [args.seed]
 
-    # Run all configurations
     results = {}
     for model_type in model_types:
         for train_size in train_sizes:

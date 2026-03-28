@@ -1,26 +1,14 @@
 """
 Evaluation, metrics, and plots for the EMLP vs MLP cube experiment.
-
-Metrics:
-  1. Equivariance error  — |f(g·x) - f(x)| for invariant value head
-  2. Value prediction    — MAE, per-depth MAE, correlation, rounded accuracy
-  3. Greedy solve rate   — success rate solving random scrambles
-  4. Data efficiency     — val MSE vs training set size
-  5. Parameter efficiency — test MAE per parameter
-
-Plots (saved to results/plots/):
-  - learning_curves.png
-  - data_efficiency.png
-  - per_depth_accuracy.png
-  - equivariance_error.png
-  - solve_rate_table.txt
+PyTorch backend.
 """
 
 import os
 import csv
 import numpy as np
+import torch
 import matplotlib
-matplotlib.use("Agg")  # Non-interactive backend
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
@@ -31,7 +19,7 @@ from cube_env import (
 from cube_group import ALL_ROTATIONS, apply_rotation
 from models import (
     build_emlp_model, build_mlp_model, load_model,
-    get_param_count, EMLP_AVAILABLE,
+    get_param_count, EMLP_AVAILABLE, DEVICE,
 )
 from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist, _CANDIDATES
 from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SEEDS, size_label
@@ -40,81 +28,59 @@ RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 PLOT_DIR = os.path.join(RESULTS_DIR, "plots")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-MAX_DISTANCE = 14  # QTM with R,R',U,U',F,F' quarter turns
+MAX_DISTANCE = 14
 
 
 # ─── Load model checkpoint ────────────────────────────────────────────────────
 
 def load_checkpoint(model_type, train_size, seed):
-    """Load a model from its best checkpoint."""
     label = f"{model_type}_{size_label(train_size)}_seed{seed}"
-    ckpt_path = os.path.join(CKPT_DIR, f"{label}.npz")
+    ckpt_path = os.path.join(CKPT_DIR, f"{label}.pt")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-
     model = load_model(model_type, ckpt_path)
+    model = model.to(DEVICE)
+    model.eval()
     return model
 
 
 def make_predict_fn(model):
-    """Create a predict function. Call once per model instance.
-
-    Note: objax.Jit and objax.Function.with_vars are intentionally avoided —
-    both can return wrong values for array (non-scalar) outputs in JAX >= 0.4.26.
-    Calling the model directly as a Python callable works correctly.
-    """
-    def _predict(x):
-        return model(x, training=False).squeeze()
-
+    """Return a predict function: numpy (N,144) -> numpy (N,) predictions."""
+    def _predict(X_np):
+        with torch.no_grad():
+            x = torch.tensor(X_np, dtype=torch.float32, device=DEVICE)
+            return model(x).squeeze().cpu().numpy()
     return _predict
 
 
-def model_predict(predict_fn, X_np):
-    """Run forward pass on numpy array X, return numpy predictions."""
-    import jax.numpy as jnp
-
-    batch_size = 512
+def model_predict(predict_fn, X_np, batch_size=512):
     preds = []
     for start in range(0, len(X_np), batch_size):
-        x_batch = jnp.array(X_np[start:start + batch_size])
-        preds.append(np.array(predict_fn(x_batch)))
+        preds.append(predict_fn(X_np[start:start + batch_size]))
     return np.concatenate(preds)
 
 
 # ─── Metric 1: Equivariance Error ─────────────────────────────────────────────
 
 def equivariance_error(predict_fn, X_test, n_rotations=10, n_states=500):
-    """Compute mean |f(g·x) - f(x)| over random states and rotations.
-
-    For a truly invariant model, this should be ~1e-7 (float32 precision).
-    predict_fn: JIT-compiled predict function from make_predict_fn().
-    """
-    import jax.numpy as jnp
-
-    # Sample random states from test set
     actual_states = min(n_states, len(X_test))
     idx = np.random.choice(len(X_test), size=actual_states, replace=False)
-    X_sample = X_test[idx]  # (actual_states, 144)
+    X_sample = X_test[idx]
 
-    # Decode states (reverse one-hot)
-    # X has shape (actual_states, 144), each row is a 24x6 one-hot flattened
-    states_sample = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)  # (actual_states, 24)
+    states_sample = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)
 
-    # Sample n_rotations random rotations from the cached group
     actual_rotations = min(n_rotations, len(ALL_ROTATIONS))
     rot_indices = np.random.choice(len(ALL_ROTATIONS), size=actual_rotations, replace=False)
     rotations = [ALL_ROTATIONS[i] for i in rot_indices]
 
+    f_original = predict_fn(X_sample)
     errors = []
-    f_original = np.array(predict_fn(jnp.array(X_sample)))  # (n_states,)
 
     for rot_perm in rotations:
-        # Apply rotation to each state
         rotated_states = np.array([apply_rotation(rot_perm, s) for s in states_sample],
                                   dtype=np.int8)
-        # Re-encode
         X_rotated = np.array([encode_state(s) for s in rotated_states], dtype=np.float32)
-        f_rotated = np.array(predict_fn(jnp.array(X_rotated)))  # (n_states,)
+        f_rotated = predict_fn(X_rotated)
         errors.append(np.abs(f_rotated - f_original))
 
     mean_err = float(np.mean(errors))
@@ -124,21 +90,13 @@ def equivariance_error(predict_fn, X_test, n_rotations=10, n_states=500):
 # ─── Metric 2: Value Prediction Accuracy ─────────────────────────────────────
 
 def value_prediction_metrics(predict_fn, X_test, y_test):
-    """Compute value prediction metrics on the test set.
-
-    predict_fn: JIT-compiled predict function from make_predict_fn().
-    Returns dict with: mae, per_depth_mae, correlation, rounded_accuracy
-    """
     preds = model_predict(predict_fn, X_test)
     y_true = y_test.astype(np.float32)
 
     mae = float(np.mean(np.abs(preds - y_true)))
     rounded_acc = float(np.mean(np.round(preds) == y_true))
-
-    # Pearson correlation
     corr = float(np.corrcoef(preds, y_true)[0, 1])
 
-    # Per-depth MAE
     per_depth_mae = {}
     for d in range(MAX_DISTANCE + 1):
         mask = y_test == d
@@ -158,13 +116,6 @@ def value_prediction_metrics(predict_fn, X_test, y_test):
 # ─── Metric 3: Greedy Solve Rate ──────────────────────────────────────────────
 
 def greedy_solve(predict_fn, initial_state, max_steps=50):
-    """Greedily solve the cube by picking the move with lowest predicted distance.
-
-    predict_fn: JIT-compiled predict function from make_predict_fn().
-    Returns (solved: bool, n_moves: int, move_sequence: list)
-    """
-    import jax.numpy as jnp
-
     state = initial_state.copy()
     move_sequence = []
 
@@ -172,14 +123,12 @@ def greedy_solve(predict_fn, initial_state, max_steps=50):
         if is_solved(state):
             return True, step_i, move_sequence
 
-        # Evaluate all 6 moves
         next_states = np.array([
             encode_state(apply_move(state, MOVES[m])) for m in range(NUM_MOVES)
         ], dtype=np.float32)
 
-        preds = np.array(predict_fn(jnp.array(next_states)))  # (6,)
+        preds = predict_fn(next_states)
         best_move = int(np.argmin(preds))
-
         state = apply_move(state, MOVES[best_move])
         move_sequence.append(best_move)
 
@@ -187,23 +136,12 @@ def greedy_solve(predict_fn, initial_state, max_steps=50):
 
 
 def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
-    """Beam search for a batch of states.
-
-    At each step, expands all states in each trial's beam, scores all
-    beam_width × NUM_MOVES candidates in one batched forward pass, and
-    keeps the top-beam_width states (lowest predicted distance).
-
-    Returns (solved: bool array, n_moves: int array)
-    """
     n = len(initial_states)
     solved = np.zeros(n, dtype=bool)
     n_moves_out = np.full(n, max_steps, dtype=int)
-
-    # beams[i] = list of (state, depth_so_far)
     beams = [[(s.copy(), 0)] for s in initial_states]
 
     for step in range(max_steps):
-        # Check for solved states in any beam position
         for i in range(n):
             if solved[i]:
                 continue
@@ -217,8 +155,7 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
         if len(active) == 0:
             break
 
-        # Expand all beam states for all active trials and batch-encode
-        expanded = []   # list-of-lists: expanded[idx] = candidates for active[idx]
+        expanded = []
         all_encoded = []
 
         for i in active:
@@ -230,22 +167,18 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
                     all_encoded.append(encode_state(ns))
             expanded.append(trial_cands)
 
-        # One batched prediction for all candidates across all active trials
         preds = model_predict(predict_fn, np.array(all_encoded, dtype=np.float32))
 
-        # Update each active trial's beam: keep top beam_width candidates
         offset = 0
         for idx, i in enumerate(active):
             cands = expanded[idx]
             count = len(cands)
             trial_preds = preds[offset:offset + count]
             offset += count
-
             top_k = min(beam_width, count)
             top_indices = np.argpartition(trial_preds, top_k - 1)[:top_k]
             beams[i] = [cands[j] for j in top_indices]
 
-    # Final solved check
     for i in range(n):
         if not solved[i]:
             for state, depth in beams[i]:
@@ -259,12 +192,6 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
 
 def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
                         beam_width=5, verbose=True):
-    """Evaluate beam-search solve rate at various scramble depths.
-
-    predict_fn: predict function from make_predict_fn().
-    beam_width:  number of states kept per step (1 = greedy).
-    Returns dict: depth -> {solve_rate, mean_moves, mean_excess}
-    """
     if scramble_depths is None:
         scramble_depths = [4, 7, 10, 14]
 
@@ -324,7 +251,6 @@ SIZE_COLORS = {50_000: "#E91E63", 200_000: "#9C27B0", 1_000_000: "#3F51B5"}
 
 
 def plot_learning_curves(train_size=200_000):
-    """Plot train/val MSE vs epoch for EMLP and MLP (mean ± std over 3 seeds)."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(f"Learning Curves (train size = {size_label(train_size)})", fontsize=14)
 
@@ -345,10 +271,7 @@ def plot_learning_curves(train_size=200_000):
                 continue
 
             max_len = max(len(c) for c in all_curves)
-            # Pad shorter runs with last value
-            padded = np.array([
-                c + [c[-1]] * (max_len - len(c)) for c in all_curves
-            ])
+            padded = np.array([c + [c[-1]] * (max_len - len(c)) for c in all_curves])
             mean = padded.mean(axis=0)
             std = padded.std(axis=0)
             epochs = np.arange(1, max_len + 1)
@@ -369,10 +292,6 @@ def plot_learning_curves(train_size=200_000):
 
 
 def plot_data_efficiency(all_val_mses):
-    """Plot val MSE vs dataset size for EMLP and MLP.
-
-    all_val_mses: dict[(model_type, train_size, seed)] -> val_mse
-    """
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.set_title("Data Efficiency: Val MSE vs Training Set Size")
     ax.set_xlabel("Training set size")
@@ -389,7 +308,6 @@ def plot_data_efficiency(all_val_mses):
                 means.append(np.mean(mses))
                 stds.append(np.std(mses))
                 sizes.append(train_size)
-
         if means:
             ax.errorbar(sizes, means, yerr=stds, marker="o",
                         label=model_type.upper(), color=COLORS[model_type],
@@ -405,18 +323,15 @@ def plot_data_efficiency(all_val_mses):
 
 
 def plot_per_depth_accuracy(metrics_emlp, metrics_mlp):
-    """Bar chart: per-depth MAE for EMLP vs MLP."""
     depths = list(range(MAX_DISTANCE + 1))
     emlp_mae = [metrics_emlp["per_depth_mae"].get(d) or 0 for d in depths]
     mlp_mae = [metrics_mlp["per_depth_mae"].get(d) or 0 for d in depths]
 
     x = np.arange(len(depths))
     width = 0.35
-
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.bar(x - width/2, emlp_mae, width, label="EMLP", color=COLORS["emlp"], alpha=0.8)
     ax.bar(x + width/2, mlp_mae, width, label="MLP", color=COLORS["mlp"], alpha=0.8)
-
     ax.set_title("Per-Depth MAE: EMLP vs MLP")
     ax.set_xlabel("Optimal Distance (BFS depth)")
     ax.set_ylabel("Mean Absolute Error")
@@ -424,7 +339,6 @@ def plot_per_depth_accuracy(metrics_emlp, metrics_mlp):
     ax.set_xticklabels([str(d) for d in depths])
     ax.legend()
     ax.grid(True, alpha=0.3, axis="y")
-
     plt.tight_layout()
     path = os.path.join(PLOT_DIR, "per_depth_accuracy.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
@@ -433,22 +347,18 @@ def plot_per_depth_accuracy(metrics_emlp, metrics_mlp):
 
 
 def plot_equivariance_error(eq_errors):
-    """Bar chart: equivariance error for EMLP vs MLP (log scale)."""
     fig, ax = plt.subplots(figsize=(6, 5))
     models = ["EMLP", "MLP"]
     errors = [eq_errors.get("emlp", 0), eq_errors.get("mlp", 0)]
     colors = [COLORS["emlp"], COLORS["mlp"]]
-
     bars = ax.bar(models, errors, color=colors, alpha=0.8, width=0.4)
     ax.set_yscale("log")
     ax.set_ylabel("Mean |f(g·x) - f(x)|")
     ax.set_title("Equivariance Error\n(lower is better; EMLP should be ~1e-7)")
     ax.grid(True, alpha=0.3, axis="y")
-
     for bar, err in zip(bars, errors):
         ax.text(bar.get_x() + bar.get_width()/2, err * 1.5,
                 f"{err:.2e}", ha="center", va="bottom", fontsize=11)
-
     plt.tight_layout()
     path = os.path.join(PLOT_DIR, "equivariance_error.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
@@ -457,7 +367,6 @@ def plot_equivariance_error(eq_errors):
 
 
 def save_solve_rate_table(solve_results, path=None):
-    """Save solve rate results to a text table."""
     if path is None:
         path = os.path.join(PLOT_DIR, "solve_rate_table.txt")
 
@@ -467,7 +376,6 @@ def save_solve_rate_table(solve_results, path=None):
         f"{'Depth':>6}  {'Model':>6}  {'Solve Rate':>12}  {'Mean Moves':>12}  {'Excess':>10}",
         "-" * 70,
     ]
-
     for depth in sorted(solve_results.keys()):
         for model_type in ["emlp", "mlp"]:
             if model_type in solve_results[depth]:
@@ -489,9 +397,8 @@ def save_solve_rate_table(solve_results, path=None):
 # ─── Full evaluation run ──────────────────────────────────────────────────────
 
 def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
-    """Run all evaluation metrics and generate all plots."""
     if not EMLP_AVAILABLE:
-        print("emlp not available. Cannot run evaluation.")
+        print("emlp not available.")
         return
 
     if train_sizes is None:
@@ -500,7 +407,7 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
         train_size_for_detail = train_sizes[-1]
 
     X_test, y_test = load_dataset("test")
-    X_val, y_val = load_dataset("val")  # loaded once, reused across all models
+    X_val, y_val = load_dataset("val")
     print(f"Test set: {X_test.shape}")
 
     all_val_mses = {}
@@ -513,19 +420,17 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
             for seed in SEEDS:
                 try:
                     m = load_checkpoint(model_type, train_size, seed)
-                    predict_fn_m = make_predict_fn(m)  # compiled once per model
+                    predict_fn_m = make_predict_fn(m)
                     preds_val = model_predict(predict_fn_m, X_val)
                     val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
                     all_val_mses[(model_type, train_size, seed)] = val_mse
                 except Exception as e:
                     print(f"  Skip (no checkpoint): {e}")
-                    pass
 
-            # Detailed metrics using train_size_for_detail model, seed 0
             if train_size == train_size_for_detail:
                 try:
                     model = load_checkpoint(model_type, train_size, 0)
-                    predict_fn = make_predict_fn(model)  # compiled once, reused below
+                    predict_fn = make_predict_fn(model)
 
                     print(f"\n── {model_type.upper()} ({size_label(train_size)}) ──")
 
@@ -550,24 +455,17 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
                 except FileNotFoundError as e:
                     print(f"  Skip: {e}")
 
-    # ── Generate plots ────────────────────────────────────────────────────────
     print("\nGenerating plots...")
-
     plot_learning_curves(train_size=train_size_for_detail)
-
     if all_val_mses:
         plot_data_efficiency(all_val_mses)
-
     if "emlp" in val_metrics and "mlp" in val_metrics:
         plot_per_depth_accuracy(val_metrics["emlp"], val_metrics["mlp"])
-
     if "emlp" in eq_errors and "mlp" in eq_errors:
         plot_equivariance_error(eq_errors)
-
     if solve_results:
         save_solve_rate_table(solve_results)
 
-    # ── Parameter efficiency ──────────────────────────────────────────────────
     print("\nParameter efficiency:")
     for model_type in ["emlp", "mlp"]:
         try:
@@ -590,7 +488,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=200_000,
-                        choices=[50_000, 200_000, 1_000_000],
-                        help="Which training size to use for detailed metrics")
+                        choices=[50_000, 200_000, 1_000_000])
     args = parser.parse_args()
     run_full_evaluation(train_size_for_detail=args.train_size)
