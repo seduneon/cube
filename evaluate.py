@@ -437,7 +437,7 @@ def run_full_evaluation(train_size_for_detail=200_000):
         print("emlp not available. Cannot run evaluation.")
         return
 
-    X_test, y_test, _ = load_dataset("test")
+    X_test, y_test = load_dataset("test")
     print(f"Test set: {X_test.shape}")
 
     all_val_mses = {}
@@ -458,7 +458,7 @@ def run_full_evaluation(train_size_for_detail=200_000):
                 for s in SEEDS:
                     try:
                         m = load_checkpoint(model_type, train_size, s)
-                        X_val, y_val, _ = load_dataset("val")
+                        X_val, y_val = load_dataset("val")
                         preds_val = model_predict(m, X_val)
                         val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
                         val_mse_list.append(val_mse)

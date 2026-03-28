@@ -110,26 +110,24 @@ def bfs_tables_exist(path=None):
 
 # ─── Dataset generation ───────────────────────────────────────────────────────
 
-def generate_dataset(n_samples, dist_table, move_table, rng=None,
+def generate_dataset(n_samples, dist_table, rng=None,
                      max_scramble=MAX_DISTANCE, verbose=True):
-    """Generate a dataset of (encoded_state, distance, optimal_move) triples.
+    """Generate a dataset of (encoded_state, distance) pairs.
 
     For each sample:
       1. Start from solved state
       2. Apply k ~ Uniform(1, max_scramble) random moves
-      3. Look up true BFS distance and optimal move
+      3. Look up true BFS distance
 
     Returns:
         X: (n_samples, 144) float32  — one-hot encoded states
-        y_dist: (n_samples,) int32   — BFS optimal distance (0-11)
-        y_move: (n_samples,) int32   — optimal first move index (0-5)
+        y_dist: (n_samples,) int32   — BFS optimal distance (0-14)
     """
     if rng is None:
         rng = np.random.RandomState(42)
 
     X = np.zeros((n_samples, 144), dtype=np.float32)
     y_dist = np.zeros(n_samples, dtype=np.int32)
-    y_move = np.zeros(n_samples, dtype=np.int32)
 
     iterator = tqdm(range(n_samples), desc="Generating") if verbose else range(n_samples)
 
@@ -148,16 +146,15 @@ def generate_dataset(n_samples, dist_table, move_table, rng=None,
         state_t = state_to_tuple(state)
         X[i] = encode_state(state)
         y_dist[i] = dist_table[state_t]
-        y_move[i] = move_table[state_t]
 
-    return X, y_dist, y_move
+    return X, y_dist
 
 
-def generate_test_dataset_stratified(n_per_depth, dist_table, move_table,
+def generate_test_dataset_stratified(n_per_depth, dist_table,
                                      rng=None, verbose=True):
     """Generate a test set stratified by depth (roughly n_per_depth per depth).
 
-    Returns X, y_dist, y_move (same format as generate_dataset).
+    Returns X, y_dist (same format as generate_dataset).
     """
     if rng is None:
         rng = np.random.RandomState(999)
@@ -172,7 +169,7 @@ def generate_test_dataset_stratified(n_per_depth, dist_table, move_table,
                             disable=not verbose, desc="Indexing"):
         states_by_depth[d].append(state_t)
 
-    X_list, y_dist_list, y_move_list = [], [], []
+    X_list, y_dist_list = [], []
 
     for d in range(MAX_DISTANCE + 1):
         pool = states_by_depth[d]
@@ -184,23 +181,20 @@ def generate_test_dataset_stratified(n_per_depth, dist_table, move_table,
             state = tuple_to_state(state_t)
             X_list.append(encode_state(state))
             y_dist_list.append(dist_table[state_t])
-            y_move_list.append(move_table[state_t])
 
     X = np.array(X_list, dtype=np.float32)
     y_dist = np.array(y_dist_list, dtype=np.int32)
-    y_move = np.array(y_move_list, dtype=np.int32)
-    return X, y_dist, y_move
+    return X, y_dist
 
 
-def save_dataset(X, y_dist, y_move, split_name, n_train=None):
+def save_dataset(X, y_dist, split_name, n_train=None):
     """Save dataset arrays to disk."""
     os.makedirs(DATA_DIR, exist_ok=True)
     suffix = f"_{n_train // 1000}k" if n_train is not None else ""
     tag = f"{split_name}{suffix}"
     np.save(os.path.join(DATA_DIR, f"X_{tag}.npy"), X)
     np.save(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"), y_dist)
-    np.save(os.path.join(DATA_DIR, f"y_move_{tag}.npy"), y_move)
-    print(f"Saved {tag}: X={X.shape}, y_dist={y_dist.shape}, y_move={y_move.shape}")
+    print(f"Saved {tag}: X={X.shape}, y_dist={y_dist.shape}")
 
 
 def load_dataset(split_name, n_train=None):
@@ -209,8 +203,7 @@ def load_dataset(split_name, n_train=None):
     tag = f"{split_name}{suffix}"
     X = np.load(os.path.join(DATA_DIR, f"X_{tag}.npy"))
     y_dist = np.load(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"))
-    y_move = np.load(os.path.join(DATA_DIR, f"y_move_{tag}.npy"))
-    return X, y_dist, y_move
+    return X, y_dist
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -246,20 +239,20 @@ if __name__ == "__main__":
     rng_test = np.random.RandomState(200)
 
     print("\nGenerating validation set...")
-    X_val, y_val_dist, y_val_move = generate_dataset(
-        VAL_SIZE, dist_table, move_table, rng=rng_val)
-    save_dataset(X_val, y_val_dist, y_val_move, "val")
+    X_val, y_val_dist = generate_dataset(
+        VAL_SIZE, dist_table, rng=rng_val)
+    save_dataset(X_val, y_val_dist, "val")
 
     print("\nGenerating stratified test set...")
-    X_test, y_test_dist, y_test_move = generate_test_dataset_stratified(
-        TEST_N_PER_DEPTH, dist_table, move_table, rng=rng_test)
-    save_dataset(X_test, y_test_dist, y_test_move, "test")
+    X_test, y_test_dist = generate_test_dataset_stratified(
+        TEST_N_PER_DEPTH, dist_table, rng=rng_test)
+    save_dataset(X_test, y_test_dist, "test")
 
     for n_train in TRAIN_SIZES:
         print(f"\nGenerating training set ({n_train:,} samples)...")
         rng_train = np.random.RandomState(300 + n_train)
-        X_train, y_train_dist, y_train_move = generate_dataset(
-            n_train, dist_table, move_table, rng=rng_train)
-        save_dataset(X_train, y_train_dist, y_train_move, "train", n_train)
+        X_train, y_train_dist = generate_dataset(
+            n_train, dist_table, rng=rng_train)
+        save_dataset(X_train, y_train_dist, "train", n_train)
 
     print("\nAll datasets generated.")

@@ -92,7 +92,7 @@ def step_bfs(skip_bfs):
     return dist_table, move_table
 
 
-def step_generate_data(dist_table, move_table, skip_data, quick):
+def step_generate_data(dist_table, skip_data, quick):
     section("Step 4: Generate datasets")
     from dataset import (
         generate_dataset, generate_test_dataset_stratified,
@@ -119,9 +119,9 @@ def step_generate_data(dist_table, move_table, skip_data, quick):
     if not os.path.exists(val_path):
         print(f"\nGenerating validation set ({VAL_SIZE:,} samples)...")
         rng = np.random.RandomState(100)
-        X_val, y_val_dist, y_val_move = generate_dataset(
-            VAL_SIZE, dist_table, move_table, rng=rng)
-        save_dataset(X_val, y_val_dist, y_val_move, "val")
+        X_val, y_val_dist = generate_dataset(
+            VAL_SIZE, dist_table, rng=rng)
+        save_dataset(X_val, y_val_dist, "val")
     else:
         print("Validation set exists — skipping.")
 
@@ -130,9 +130,9 @@ def step_generate_data(dist_table, move_table, skip_data, quick):
     if not os.path.exists(test_path):
         print(f"\nGenerating stratified test set (~{TEST_N_PER_DEPTH*12:,} samples)...")
         rng = np.random.RandomState(200)
-        X_test, y_test_dist, y_test_move = generate_test_dataset_stratified(
-            TEST_N_PER_DEPTH, dist_table, move_table, rng=rng)
-        save_dataset(X_test, y_test_dist, y_test_move, "test")
+        X_test, y_test_dist = generate_test_dataset_stratified(
+            TEST_N_PER_DEPTH, dist_table, rng=rng)
+        save_dataset(X_test, y_test_dist, "test")
     else:
         print("Test set exists — skipping.")
 
@@ -143,9 +143,9 @@ def step_generate_data(dist_table, move_table, skip_data, quick):
         if not os.path.exists(train_path):
             print(f"\nGenerating training set ({n_train:,} samples)...")
             rng = np.random.RandomState(300 + n_train)
-            X_train, y_train_dist, y_train_move = generate_dataset(
-                n_train, dist_table, move_table, rng=rng)
-            save_dataset(X_train, y_train_dist, y_train_move, "train", n_train)
+            X_train, y_train_dist = generate_dataset(
+                n_train, dist_table, rng=rng)
+            save_dataset(X_train, y_train_dist, "train", n_train)
         else:
             print(f"Train set ({n_train:,}) exists — skipping.")
 
@@ -241,7 +241,7 @@ def main():
             dist_table, move_table = load_bfs_tables()
 
     train_sizes = step_generate_data(
-        dist_table, move_table, args.skip_data, args.quick)
+        dist_table, args.skip_data, args.quick)
 
     step_train(args.skip_train, args.model, args.quick, train_sizes)
 

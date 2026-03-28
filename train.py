@@ -36,7 +36,7 @@ CH = 384
 NUM_LAYERS = 3
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]
-SIZE_LABELS = {50_000: "50k", 200_000: "200k", 1_000_000: "1m"}
+SIZE_LABELS = {1000: "1k", 50_000: "50k", 200_000: "200k", 1_000_000: "1m"}
 SEEDS = [0, 1, 2]
 
 
@@ -93,8 +93,8 @@ def train_one(model_type, train_size, seed, verbose=True):
     key = jax.random.PRNGKey(seed)
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    X_train, y_train, _ = load_split("train", train_size)
-    X_val, y_val, _ = load_split("val")
+    X_train, y_train = load_split("train", train_size)
+    X_val, y_val = load_split("val")
     y_train = y_train.astype(np.float32)
     y_val = y_val.astype(np.float32)
 
