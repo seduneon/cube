@@ -1,11 +1,14 @@
 """
-Training loop for EMLP and MLP value networks on the 2x2x2 Pocket Cube.
+Training loop for cube value networks.
 PyTorch backend — works on Kaggle without JAX version conflicts.
 
 Usage:
-    python train.py                          # train all 18 configs
-    python train.py --model emlp --size 50k --seed 0  # single run
-    python train.py --model mlp  --size 200k --seed 1
+    python train.py                                         # train all configs
+    python train.py --model emlp    --size 200k --seed 0
+    python train.py --model emlp_col --size 200k --seed 0
+    python train.py --model mlp     --size 200k --seed 0
+    python train.py --model mlp_aug --size 200k --seed 0
+    python train.py --model all     --size all  --seed -1  # 18+ runs
 """
 
 import os
@@ -15,11 +18,8 @@ import argparse
 import numpy as np
 import torch
 
-from models import (
-    build_emlp_model, build_mlp_model, cosine_decay_lr,
-    save_model, load_model, get_param_count, densify_emlp_model,
-    DEVICE,
-)
+from models import MODEL_REGISTRY, build_model, cosine_decay_lr, save_model, get_param_count, DEVICE
+from cube_symmetry import ALL_COLOR_PERMS
 from dataset import load_dataset, DATA_DIR
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
@@ -32,12 +32,24 @@ MAX_EPOCHS = 200
 EARLY_STOP_PATIENCE = 20
 LR_INIT = 3e-4
 LR_MIN = 1e-5
-CH_EMLP = 84   # c_hidden; gives ~351K params — matches MLP for fair comparison
-CH_MLP  = 384  # hidden_dim; gives ~351K params
 NUM_LAYERS = 3
+
+# Per-model width hyperparameter.
+#   emlp:     c_hidden=84  → ~351K params
+#   emlp_col: k_hidden=14  → 14 blocks × 6 = 84 effective channels, ~16K params
+#   mlp:      hidden_dim=384 → ~351K params (matched to emlp for fair comparison)
+#   mlp_aug:  same as mlp
+MODEL_WIDTHS = {
+    "emlp":     84,
+    "emlp_col": 14,
+    "mlp":      384,
+    "mlp_aug":  384,
+}
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]
 SEEDS = [0, 1, 2]
+
+ALL_MODEL_TYPES = list(MODEL_REGISTRY.keys())  # ["emlp", "emlp_col", "mlp", "mlp_aug"]
 
 
 def size_label(n):
@@ -58,6 +70,18 @@ def make_batches(X, y, batch_size, rng):
     for start in range(0, n, batch_size):
         batch_idx = idx[start:start + batch_size]
         yield X[batch_idx], y[batch_idx]
+
+
+# ─── Color augmentation ───────────────────────────────────────────────────────
+
+def apply_color_aug(x_batch: np.ndarray, rng: np.random.RandomState) -> np.ndarray:
+    """Apply a random S6 color permutation to each sample in the batch.
+
+    x_batch: (N, 144) float32 one-hot
+    Returns: (N, 144) float32 with color channels permuted (copy).
+    """
+    perm = ALL_COLOR_PERMS[rng.randint(0, len(ALL_COLOR_PERMS))]
+    return x_batch.reshape(-1, 24, 6)[:, :, perm].reshape(-1, 144).copy()
 
 
 # ─── Training ─────────────────────────────────────────────────────────────────
@@ -92,20 +116,20 @@ def train_one(model_type, train_size, seed, verbose=True):
     if verbose:
         print(f"Train: {X_train.shape}, Val: {X_val.shape}")
 
-    # ── Model ────────────────────────────────────────────────────────────────
-    if model_type == "emlp":
-        model, G, _, _ = build_emlp_model(ch=CH_EMLP, num_layers=NUM_LAYERS)
-    else:
-        model, G, _, _ = build_mlp_model(ch=CH_MLP, num_layers=NUM_LAYERS)
-
-    model = model.to(DEVICE)
+    # ── Model (via registry) ─────────────────────────────────────────────────
+    spec = MODEL_REGISTRY[model_type]
+    width = MODEL_WIDTHS[model_type]
+    model = build_model(model_type, width, NUM_LAYERS).to(DEVICE)
     n_params = get_param_count(model)
+
     if verbose:
+        print(f"Model:      {spec.label}")
         print(f"Parameters: {n_params:,}")
+        if spec.color_augment:
+            print("            [color augmentation enabled]")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR_INIT)
 
-    # Pre-place validation data on device
     X_val_t = torch.tensor(X_val, dtype=torch.float32, device=DEVICE)
     y_val_t = torch.tensor(y_val, dtype=torch.float32, device=DEVICE)
 
@@ -126,6 +150,10 @@ def train_one(model_type, train_size, seed, verbose=True):
             lr = cosine_decay_lr(step, total_steps, LR_INIT, LR_MIN)
             for pg in optimizer.param_groups:
                 pg['lr'] = lr
+
+            # Apply color augmentation if the model spec requests it
+            if spec.color_augment:
+                x_batch = apply_color_aug(x_batch, rng)
 
             x_t = torch.tensor(x_batch, dtype=torch.float32, device=DEVICE)
             y_t = torch.tensor(y_batch, dtype=torch.float32, device=DEVICE)
@@ -177,7 +205,7 @@ def train_one(model_type, train_size, seed, verbose=True):
             patience_counter += 1
             if patience_counter >= EARLY_STOP_PATIENCE:
                 if verbose:
-                    print(f"Early stopping at epoch {epoch+1} (patience={EARLY_STOP_PATIENCE})")
+                    print(f"Early stopping at epoch {epoch+1}")
                 break
 
     # ── Save logs ─────────────────────────────────────────────────────────────
@@ -197,14 +225,17 @@ def train_one(model_type, train_size, seed, verbose=True):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Train EMLP/MLP on 2x2x2 cube.")
-    parser.add_argument("--model", choices=["emlp", "mlp", "all"], default="all")
+    parser = argparse.ArgumentParser(description="Train cube value networks.")
+    parser.add_argument("--model",
+                        choices=ALL_MODEL_TYPES + ["all"],
+                        default="all",
+                        help="Model type(s) to train")
     parser.add_argument("--size", choices=["50k", "200k", "1m", "all"], default="all")
     parser.add_argument("--seed", type=int, choices=[0, 1, 2, -1], default=-1,
                         help="-1 means all seeds")
     args = parser.parse_args()
 
-    model_types = ["emlp", "mlp"] if args.model == "all" else [args.model]
+    model_types = ALL_MODEL_TYPES if args.model == "all" else [args.model]
     size_map = {"50k": 50_000, "200k": 200_000, "1m": 1_000_000}
     train_sizes = TRAIN_SIZES if args.size == "all" else [size_map[args.size]]
     seeds = SEEDS if args.seed == -1 else [args.seed]
@@ -222,7 +253,7 @@ def main():
     print("TRAINING SUMMARY")
     print("=" * 60)
     for config, val_mse in sorted(results.items()):
-        print(f"  {config:<30s}  val_mse={val_mse:.4f}")
+        print(f"  {config:<38s}  val_mse={val_mse:.4f}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 """
-Evaluation, metrics, and plots for the EMLP vs MLP cube experiment.
+Evaluation, metrics, and plots for the cube value network experiment.
 PyTorch backend.
+
+Supports any subset of model types registered in MODEL_REGISTRY.
 """
 
 import os
@@ -16,11 +18,8 @@ from cube_env import (
     SOLVED_STATE, MOVES, MOVE_NAMES, INVERSE_MOVE, NUM_MOVES,
     apply_move, encode_state, is_solved, state_to_tuple, tuple_to_state,
 )
-from cube_group import ALL_ROTATIONS, apply_rotation
-from models import (
-    build_emlp_model, build_mlp_model, load_model,
-    get_param_count, DEVICE,
-)
+from cube_symmetry import ALL_ROTATIONS, ALL_COLOR_PERMS, apply_color_perm_batch, apply_rotation
+from models import MODEL_REGISTRY, load_model, get_param_count, DEVICE
 from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist, _CANDIDATES
 from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SEEDS, size_label
 
@@ -29,6 +28,22 @@ PLOT_DIR = os.path.join(RESULTS_DIR, "plots")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 MAX_DISTANCE = 14
+
+# ─── Plot styling ─────────────────────────────────────────────────────────────
+
+# One color per model key — extend if new models are added to the registry
+MODEL_COLORS = {
+    "emlp":     "#2196F3",   # blue
+    "emlp_col": "#4CAF50",   # green
+    "mlp":      "#FF5722",   # orange-red
+    "mlp_aug":  "#9C27B0",   # purple
+}
+
+def _model_color(key):
+    return MODEL_COLORS.get(key, "#888888")
+
+def _model_label(key):
+    return MODEL_REGISTRY[key].label if key in MODEL_REGISTRY else key
 
 
 # ─── Load model checkpoint ────────────────────────────────────────────────────
@@ -48,7 +63,7 @@ def load_checkpoint(model_type, train_size, seed, verbose=True):
 
 
 def make_predict_fn(model):
-    """Return a predict function: numpy (N,144) -> numpy (N,) predictions."""
+    """Return a predict function: numpy (N, 144) -> numpy (N,) predictions."""
     def _predict(X_np):
         with torch.no_grad():
             x = torch.tensor(X_np, dtype=torch.float32, device=DEVICE)
@@ -65,29 +80,52 @@ def model_predict(predict_fn, X_np, batch_size=512):
 
 # ─── Metric 1: Equivariance Error ─────────────────────────────────────────────
 
-def equivariance_error(predict_fn, X_test, n_rotations=10, n_states=500):
+def equivariance_error(predict_fn, X_test, symmetries=("spatial",),
+                       n_samples=10, n_states=500):
+    """Measure equivariance error for each requested symmetry type.
+
+    Parameters
+    ----------
+    predict_fn  : callable (N, 144) -> (N,)
+    X_test      : (N, 144) float32 one-hot states
+    symmetries  : tuple of symmetry names to test: "spatial" and/or "color"
+    n_samples   : number of random group elements to sample per state
+    n_states    : number of test states to use
+
+    Returns
+    -------
+    dict[str, float]  — mean absolute equivariance error per symmetry type
+    """
     actual_states = min(n_states, len(X_test))
     idx = np.random.choice(len(X_test), size=actual_states, replace=False)
     X_sample = X_test[idx]
-
-    states_sample = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)
-
-    actual_rotations = min(n_rotations, len(ALL_ROTATIONS))
-    rot_indices = np.random.choice(len(ALL_ROTATIONS), size=actual_rotations, replace=False)
-    rotations = [ALL_ROTATIONS[i] for i in rot_indices]
-
     f_original = predict_fn(X_sample)
-    errors = []
 
-    for rot_perm in rotations:
-        rotated_states = np.array([apply_rotation(rot_perm, s) for s in states_sample],
-                                  dtype=np.int8)
-        X_rotated = np.array([encode_state(s) for s in rotated_states], dtype=np.float32)
-        f_rotated = predict_fn(X_rotated)
-        errors.append(np.abs(f_rotated - f_original))
+    results = {}
 
-    mean_err = float(np.mean(errors))
-    return mean_err, np.array(errors)
+    if "spatial" in symmetries:
+        states_24 = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)
+        n_rots = min(n_samples, len(ALL_ROTATIONS))
+        rot_indices = np.random.choice(len(ALL_ROTATIONS), size=n_rots, replace=False)
+        errors = []
+        for ri in rot_indices:
+            rot_perm = ALL_ROTATIONS[ri]
+            rotated = np.array([apply_rotation(rot_perm, s) for s in states_24], dtype=np.int8)
+            X_rot = np.array([encode_state(s) for s in rotated], dtype=np.float32)
+            errors.append(np.abs(predict_fn(X_rot) - f_original))
+        results["spatial"] = float(np.mean(errors))
+
+    if "color" in symmetries:
+        n_perms = min(n_samples, len(ALL_COLOR_PERMS))
+        perm_indices = np.random.choice(len(ALL_COLOR_PERMS), size=n_perms, replace=False)
+        errors = []
+        for pi in perm_indices:
+            perm = ALL_COLOR_PERMS[pi]
+            X_perm = apply_color_perm_batch(X_sample, perm)
+            errors.append(np.abs(predict_fn(X_perm) - f_original))
+        results["color"] = float(np.mean(errors))
+
+    return results
 
 
 # ─── Metric 2: Value Prediction Accuracy ─────────────────────────────────────
@@ -121,20 +159,16 @@ def value_prediction_metrics(predict_fn, X_test, y_test):
 def greedy_solve(predict_fn, initial_state, max_steps=50):
     state = initial_state.copy()
     move_sequence = []
-
     for step_i in range(max_steps):
         if is_solved(state):
             return True, step_i, move_sequence
-
         next_states = np.array([
             encode_state(apply_move(state, MOVES[m])) for m in range(NUM_MOVES)
         ], dtype=np.float32)
-
         preds = predict_fn(next_states)
         best_move = int(np.argmin(preds))
         state = apply_move(state, MOVES[best_move])
         move_sequence.append(best_move)
-
     return is_solved(state), len(move_sequence), move_sequence
 
 
@@ -160,7 +194,6 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
 
         expanded = []
         all_encoded = []
-
         for i in active:
             trial_cands = []
             for state, depth in beams[i]:
@@ -171,7 +204,6 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
             expanded.append(trial_cands)
 
         preds = model_predict(predict_fn, np.array(all_encoded, dtype=np.float32))
-
         offset = 0
         for idx, i in enumerate(active):
             cands = expanded[idx]
@@ -195,12 +227,6 @@ def _beam_search_batch(predict_fn, initial_states, beam_width=5, max_steps=50):
 
 def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
                         beam_width=20, verbose=True):
-    """Evaluate beam-search solve rate at exact BFS distances.
-
-    States are sampled from the BFS table so that each start state is
-    EXACTLY `depth` moves from solved — not just scrambled by `depth`
-    random moves (which often land much closer due to cancellations).
-    """
     if scramble_depths is None:
         scramble_depths = [4, 7, 10, 14]
 
@@ -213,9 +239,7 @@ def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
         print("  Loading BFS table for exact-distance sampling...")
     dist_table, _ = load_bfs_tables()
 
-    # Group all states by their exact BFS distance
-    from collections import defaultdict as _dd
-    states_by_depth = _dd(list)
+    states_by_depth = defaultdict(list)
     for state_t, d in dist_table.items():
         states_by_depth[d].append(state_t)
 
@@ -228,29 +252,18 @@ def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
             if verbose:
                 print(f"  depth={depth:2d}: no states at this exact distance")
             continue
-
         n = min(n_trials, len(pool))
         indices = rng.choice(len(pool), size=n, replace=False)
         start_states = [tuple_to_state(pool[i]) for i in indices]
-
-        solved_arr, n_moves_arr = _beam_search_batch(
-            predict_fn, start_states, beam_width=beam_width)
-
+        solved_arr, n_moves_arr = _beam_search_batch(predict_fn, start_states, beam_width=beam_width)
         solve_rate = float(solved_arr.mean())
         move_lengths = n_moves_arr[solved_arr].tolist()
         mean_moves = float(np.mean(move_lengths)) if move_lengths else float("nan")
         mean_excess = mean_moves - depth if move_lengths else float("nan")
-
-        results[depth] = {
-            "solve_rate": solve_rate,
-            "mean_moves": mean_moves,
-            "mean_excess": mean_excess,
-        }
-
+        results[depth] = {"solve_rate": solve_rate, "mean_moves": mean_moves, "mean_excess": mean_excess}
         if verbose:
             print(f"  depth={depth:2d}: solve_rate={solve_rate:.1%}  "
-                  f"mean_moves={mean_moves:.1f}  excess={mean_excess:+.1f}"
-                  f"  (n={n})")
+                  f"mean_moves={mean_moves:.1f}  excess={mean_excess:+.1f}  (n={n})")
 
     return results
 
@@ -271,11 +284,7 @@ def load_log(model_type, train_size, seed):
 
 # ─── Plots ────────────────────────────────────────────────────────────────────
 
-COLORS = {"emlp": "#2196F3", "mlp": "#FF5722"}
-SIZE_COLORS = {50_000: "#E91E63", 200_000: "#9C27B0", 1_000_000: "#3F51B5"}
-
-
-def plot_learning_curves(train_size=200_000):
+def plot_learning_curves(model_types, train_size=200_000):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(f"Learning Curves (train size = {size_label(train_size)})", fontsize=14)
 
@@ -285,26 +294,22 @@ def plot_learning_curves(train_size=200_000):
         ax.set_xlabel("Epoch")
         ax.set_ylabel("MSE")
 
-        for model_type in ["emlp", "mlp"]:
+        for key in model_types:
             all_curves = []
             for seed in SEEDS:
-                log = load_log(model_type, train_size, seed)
+                log = load_log(key, train_size, seed)
                 if log is not None:
                     all_curves.append([row[metric] for row in log])
-
             if not all_curves:
                 continue
-
             max_len = max(len(c) for c in all_curves)
             padded = np.array([c + [c[-1]] * (max_len - len(c)) for c in all_curves])
             mean = padded.mean(axis=0)
             std = padded.std(axis=0)
             epochs = np.arange(1, max_len + 1)
-
-            ax.plot(epochs, mean, label=model_type.upper(), color=COLORS[model_type])
+            ax.plot(epochs, mean, label=_model_label(key), color=_model_color(key))
             ax.fill_between(epochs, mean - std, mean + std,
-                            alpha=0.2, color=COLORS[model_type])
-
+                            alpha=0.2, color=_model_color(key))
         ax.legend()
         ax.set_yscale("log")
         ax.grid(True, alpha=0.3)
@@ -316,7 +321,7 @@ def plot_learning_curves(train_size=200_000):
     print(f"Saved {path}")
 
 
-def plot_data_efficiency(all_val_mses):
+def plot_data_efficiency(all_val_mses, model_types):
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.set_title("Data Efficiency: Val MSE vs Training Set Size")
     ax.set_xlabel("Training set size")
@@ -324,10 +329,10 @@ def plot_data_efficiency(all_val_mses):
     ax.set_xscale("log")
     ax.set_yscale("log")
 
-    for model_type in ["emlp", "mlp"]:
+    for key in model_types:
         means, stds, sizes = [], [], []
         for train_size in TRAIN_SIZES:
-            mses = [all_val_mses.get((model_type, train_size, s)) for s in SEEDS]
+            mses = [all_val_mses.get((key, train_size, s)) for s in SEEDS]
             mses = [m for m in mses if m is not None]
             if mses:
                 means.append(np.mean(mses))
@@ -335,7 +340,7 @@ def plot_data_efficiency(all_val_mses):
                 sizes.append(train_size)
         if means:
             ax.errorbar(sizes, means, yerr=stds, marker="o",
-                        label=model_type.upper(), color=COLORS[model_type],
+                        label=_model_label(key), color=_model_color(key),
                         capsize=5, linewidth=2, markersize=8)
 
     ax.legend()
@@ -347,17 +352,22 @@ def plot_data_efficiency(all_val_mses):
     print(f"Saved {path}")
 
 
-def plot_per_depth_accuracy(metrics_emlp, metrics_mlp):
+def plot_per_depth_accuracy(metrics_by_model):
+    """metrics_by_model: dict[model_key -> value_prediction_metrics result]"""
     depths = list(range(MAX_DISTANCE + 1))
-    emlp_mae = [metrics_emlp["per_depth_mae"].get(d) or 0 for d in depths]
-    mlp_mae = [metrics_mlp["per_depth_mae"].get(d) or 0 for d in depths]
-
+    keys = list(metrics_by_model.keys())
+    n_models = len(keys)
+    width = 0.8 / n_models
     x = np.arange(len(depths))
-    width = 0.35
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.bar(x - width/2, emlp_mae, width, label="EMLP", color=COLORS["emlp"], alpha=0.8)
-    ax.bar(x + width/2, mlp_mae, width, label="MLP", color=COLORS["mlp"], alpha=0.8)
-    ax.set_title("Per-Depth MAE: EMLP vs MLP")
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    for i, key in enumerate(keys):
+        mae_vals = [metrics_by_model[key]["per_depth_mae"].get(d) or 0 for d in depths]
+        offset = (i - (n_models - 1) / 2) * width
+        ax.bar(x + offset, mae_vals, width, label=_model_label(key),
+               color=_model_color(key), alpha=0.8)
+
+    ax.set_title("Per-Depth MAE")
     ax.set_xlabel("Optimal Distance (BFS depth)")
     ax.set_ylabel("Mean Absolute Error")
     ax.set_xticks(x)
@@ -371,19 +381,39 @@ def plot_per_depth_accuracy(metrics_emlp, metrics_mlp):
     print(f"Saved {path}")
 
 
-def plot_equivariance_error(eq_errors):
-    fig, ax = plt.subplots(figsize=(6, 5))
-    models = ["EMLP", "MLP"]
-    errors = [eq_errors.get("emlp", 0), eq_errors.get("mlp", 0)]
-    colors = [COLORS["emlp"], COLORS["mlp"]]
-    bars = ax.bar(models, errors, color=colors, alpha=0.8, width=0.4)
-    ax.set_yscale("log")
-    ax.set_ylabel("Mean |f(g·x) - f(x)|")
-    ax.set_title("Equivariance Error\n(lower is better; EMLP should be ~1e-7)")
-    ax.grid(True, alpha=0.3, axis="y")
-    for bar, err in zip(bars, errors):
-        ax.text(bar.get_x() + bar.get_width()/2, err * 1.5,
-                f"{err:.2e}", ha="center", va="bottom", fontsize=11)
+def plot_equivariance_error(eq_errors_by_model):
+    """eq_errors_by_model: dict[model_key -> dict[symmetry -> float]]
+
+    e.g. {"emlp": {"spatial": 1e-7}, "emlp_col": {"spatial": 1e-7, "color": 1e-7}, "mlp": {}}
+    """
+    symmetry_types = ["spatial", "color"]
+    has_sym = {sym: any(sym in v for v in eq_errors_by_model.values())
+               for sym in symmetry_types}
+    active_syms = [s for s in symmetry_types if has_sym[s]]
+
+    if not active_syms:
+        return
+
+    n_syms = len(active_syms)
+    fig, axes = plt.subplots(1, n_syms, figsize=(5 * n_syms, 5))
+    if n_syms == 1:
+        axes = [axes]
+
+    for ax, sym in zip(axes, active_syms):
+        keys = [k for k, v in eq_errors_by_model.items() if sym in v]
+        errors = [eq_errors_by_model[k][sym] for k in keys]
+        colors = [_model_color(k) for k in keys]
+        labels = [_model_label(k) for k in keys]
+
+        bars = ax.bar(labels, errors, color=colors, alpha=0.8, width=0.5)
+        ax.set_yscale("log")
+        ax.set_ylabel("Mean |f(g·x) − f(x)|")
+        ax.set_title(f"{sym.capitalize()} equivariance error\n(lower is better)")
+        ax.grid(True, alpha=0.3, axis="y")
+        for bar, err in zip(bars, errors):
+            ax.text(bar.get_x() + bar.get_width() / 2, err * 1.5,
+                    f"{err:.2e}", ha="center", va="bottom", fontsize=9)
+
     plt.tight_layout()
     path = os.path.join(PLOT_DIR, "equivariance_error.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
@@ -391,22 +421,22 @@ def plot_equivariance_error(eq_errors):
     print(f"Saved {path}")
 
 
-def save_solve_rate_table(solve_results, path=None):
+def save_solve_rate_table(solve_results, model_types, path=None):
     if path is None:
         path = os.path.join(PLOT_DIR, "solve_rate_table.txt")
 
     lines = [
         "Greedy Solve Rate",
-        "=" * 70,
-        f"{'Depth':>6}  {'Model':>6}  {'Solve Rate':>12}  {'Mean Moves':>12}  {'Excess':>10}",
-        "-" * 70,
+        "=" * 80,
+        f"{'Depth':>6}  {'Model':<25}  {'Solve Rate':>12}  {'Mean Moves':>12}  {'Excess':>10}",
+        "-" * 80,
     ]
     for depth in sorted(solve_results.keys()):
-        for model_type in ["emlp", "mlp"]:
-            if model_type in solve_results[depth]:
-                r = solve_results[depth][model_type]
+        for key in model_types:
+            if key in solve_results[depth]:
+                r = solve_results[depth][key]
                 lines.append(
-                    f"{depth:>6}  {model_type.upper():>6}  "
+                    f"{depth:>6}  {_model_label(key):<25}  "
                     f"{r['solve_rate']:>11.1%}  "
                     f"{r['mean_moves']:>12.1f}  "
                     f"{r['mean_excess']:>+10.1f}"
@@ -421,86 +451,107 @@ def save_solve_rate_table(solve_results, path=None):
 
 # ─── Full evaluation run ──────────────────────────────────────────────────────
 
-def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
+def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
+                        model_types=None):
+    """Run evaluation for the given model types.
+
+    Parameters
+    ----------
+    train_size_for_detail : int   — which training size to use for detailed metrics
+    train_sizes           : list  — training sizes to include in data-efficiency plot
+    model_types           : list  — model keys to evaluate (default: ["emlp", "mlp"])
+    """
     if train_sizes is None:
         train_sizes = TRAIN_SIZES
     if train_size_for_detail not in train_sizes:
         train_size_for_detail = train_sizes[-1]
+    if model_types is None:
+        model_types = ["emlp", "mlp"]
 
     X_test, y_test = load_dataset("test")
     X_val, y_val = load_dataset("val")
     print(f"Test set: {X_test.shape}")
 
     all_val_mses = {}
-    eq_errors = {}
+    eq_errors = {}           # {model_key: {symmetry: float}}
     val_metrics = {}
     solve_results = defaultdict(dict)
 
-    for model_type in ["emlp", "mlp"]:
+    for key in model_types:
+        spec = MODEL_REGISTRY.get(key)
         for train_size in train_sizes:
             for seed in SEEDS:
                 try:
-                    m = load_checkpoint(model_type, train_size, seed)
+                    m = load_checkpoint(key, train_size, seed)
                     predict_fn_m = make_predict_fn(m)
                     preds_val = model_predict(predict_fn_m, X_val)
                     val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
-                    all_val_mses[(model_type, train_size, seed)] = val_mse
+                    all_val_mses[(key, train_size, seed)] = val_mse
                 except Exception as e:
                     print(f"  Skip (no checkpoint): {e}")
 
-            if train_size == train_size_for_detail:
-                try:
-                    model = load_checkpoint(model_type, train_size, 0)
-                    predict_fn = make_predict_fn(model)
+        if train_size_for_detail in train_sizes:
+            try:
+                model = load_checkpoint(key, train_size_for_detail, 0)
+                predict_fn = make_predict_fn(model)
 
-                    print(f"\n── {model_type.upper()} ({size_label(train_size)}) ──")
+                print(f"\n── {_model_label(key)} ({size_label(train_size_for_detail)}) ──")
 
+                if spec and spec.symmetries:
                     print("  Equivariance error...")
-                    eq_err, _ = equivariance_error(predict_fn, X_test)
-                    eq_errors[model_type] = eq_err
-                    print(f"  Equivariance error: {eq_err:.2e}")
+                    eq_result = equivariance_error(predict_fn, X_test,
+                                                   symmetries=spec.symmetries)
+                    eq_errors[key] = eq_result
+                    for sym, err in eq_result.items():
+                        print(f"    {sym}: {err:.2e}")
+                else:
+                    # MLP-like: still measure spatial error to show it's non-zero
+                    eq_result = equivariance_error(predict_fn, X_test,
+                                                   symmetries=("spatial",))
+                    eq_errors[key] = eq_result
+                    print(f"  Spatial equivariance error: {eq_result['spatial']:.2e}")
 
-                    print("  Value prediction metrics...")
-                    metrics = value_prediction_metrics(predict_fn, X_test, y_test)
-                    val_metrics[model_type] = metrics
-                    print(f"  MAE: {metrics['mae']:.4f}")
-                    print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
-                    print(f"  Pearson r: {metrics['correlation']:.4f}")
+                print("  Value prediction metrics...")
+                metrics = value_prediction_metrics(predict_fn, X_test, y_test)
+                val_metrics[key] = metrics
+                print(f"  MAE: {metrics['mae']:.4f}")
+                print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
+                print(f"  Pearson r: {metrics['correlation']:.4f}")
 
-                    print("  Greedy solve rate...")
-                    solve_res = evaluate_solve_rate(
-                        predict_fn, n_trials=500, beam_width=20, verbose=True)
-                    for depth, res in solve_res.items():
-                        solve_results[depth][model_type] = res
+                print("  Greedy solve rate...")
+                solve_res = evaluate_solve_rate(predict_fn, n_trials=500,
+                                                beam_width=20, verbose=True)
+                for depth, res in solve_res.items():
+                    solve_results[depth][key] = res
 
-                except FileNotFoundError as e:
-                    print(f"  Skip: {e}")
+            except FileNotFoundError as e:
+                print(f"  Skip: {e}")
 
     print("\nGenerating plots...")
-    plot_learning_curves(train_size=train_size_for_detail)
+    plot_learning_curves(model_types, train_size=train_size_for_detail)
     if all_val_mses:
-        plot_data_efficiency(all_val_mses)
-    if "emlp" in val_metrics and "mlp" in val_metrics:
-        plot_per_depth_accuracy(val_metrics["emlp"], val_metrics["mlp"])
-    if "emlp" in eq_errors and "mlp" in eq_errors:
+        plot_data_efficiency(all_val_mses, model_types)
+    if val_metrics:
+        plot_per_depth_accuracy(val_metrics)
+    if eq_errors:
         plot_equivariance_error(eq_errors)
     if solve_results:
-        save_solve_rate_table(solve_results)
+        save_solve_rate_table(solve_results, model_types)
 
     if val_metrics:
         print("\nSummary:")
-        print(f"  {'Model':<6}  {'Params':>10}  {'MAE':>8}  {'Rounded Acc':>12}  {'Pearson r':>10}")
-        print(f"  {'-'*52}")
-        for model_type in ["emlp", "mlp"]:
-            if model_type not in val_metrics:
+        print(f"  {'Model':<25}  {'Params':>10}  {'MAE':>8}  {'Rounded Acc':>12}  {'Pearson r':>10}")
+        print(f"  {'-'*70}")
+        for key in model_types:
+            if key not in val_metrics:
                 continue
             try:
-                model = load_checkpoint(model_type, train_size_for_detail, 0, verbose=False)
+                model = load_checkpoint(key, train_size_for_detail, 0, verbose=False)
                 n_params = get_param_count(model)
             except Exception:
                 n_params = 0
-            m = val_metrics[model_type]
-            print(f"  {model_type.upper():<6}  {n_params:>10,}  {m['mae']:>8.4f}"
+            m = val_metrics[key]
+            print(f"  {_model_label(key):<25}  {n_params:>10,}  {m['mae']:>8.4f}"
                   f"  {m['rounded_accuracy']:>11.1%}  {m['correlation']:>10.4f}")
 
     print("\nEvaluation complete. Plots saved to:", PLOT_DIR)
@@ -510,8 +561,15 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None):
 
 if __name__ == "__main__":
     import argparse
+    from train import ALL_MODEL_TYPES
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=200_000,
                         choices=[50_000, 200_000, 1_000_000])
+    parser.add_argument("--models", nargs="+",
+                        choices=ALL_MODEL_TYPES,
+                        default=["emlp", "mlp"],
+                        help="Model types to evaluate")
     args = parser.parse_args()
-    run_full_evaluation(train_size_for_detail=args.train_size)
+    run_full_evaluation(train_size_for_detail=args.train_size,
+                        model_types=args.models)

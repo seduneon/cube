@@ -1,29 +1,39 @@
 """
-Orchestrator: run the full EMLP vs MLP pocket cube pipeline end-to-end.
+Orchestrator: run the full cube value network pipeline end-to-end.
 
 Steps:
   1. Verify cube environment (move sanity checks)
   2. Verify rotation group (24 elements)
   3. Run BFS to compute all optimal distances
   4. Generate train/val/test datasets
-  5. Train all 18 configurations (EMLP+MLP × 50K/200K/1M × 3 seeds)
+  5. Train all configurations
   6. Evaluate and generate plots
 
 Usage:
-    python run_all.py                  # full pipeline
-    python run_all.py --skip-bfs       # reuse existing BFS table
-    python run_all.py --skip-data      # reuse existing datasets
-    python run_all.py --skip-train     # only evaluate existing checkpoints
-    python run_all.py --quick          # small test run (1K samples, 2 epochs)
+    python run_all.py                          # full pipeline, all models
+    python run_all.py --skip-bfs               # reuse existing BFS table
+    python run_all.py --skip-data              # reuse existing datasets
+    python run_all.py --skip-train             # only evaluate existing checkpoints
+    python run_all.py --quick                  # small test run (1K samples, 2 epochs)
+    python run_all.py --model emlp             # train only the spatial-equivariant model
+    python run_all.py --model emlp_col         # train only the color+spatial model
+    python run_all.py --model emlp emlp_col    # train both equivariant variants
+    python run_all.py --model all              # all 4 model types
 """
 
 import time
 import argparse
 
+from models import MODEL_REGISTRY
+
+
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
+ALL_MODEL_KEYS = list(MODEL_REGISTRY.keys())  # ["emlp", "emlp_col", "mlp", "mlp_aug"]
+
+
 def parse_args():
-    p = argparse.ArgumentParser(description="Full EMLP cube pipeline")
+    p = argparse.ArgumentParser(description="Full cube value network pipeline")
     p.add_argument("--skip-bfs", action="store_true",
                    help="Skip BFS, load existing table")
     p.add_argument("--skip-data", action="store_true",
@@ -32,17 +42,19 @@ def parse_args():
                    help="Skip training, load existing checkpoints")
     p.add_argument("--quick", action="store_true",
                    help="Quick test: 1K train samples, 2 epochs, 1 seed")
-    p.add_argument("--model", choices=["emlp", "mlp", "all"], default="all",
-                   help="Which model(s) to train")
+    p.add_argument("--model",
+                   nargs="+",
+                   choices=ALL_MODEL_KEYS + ["all"],
+                   default=["emlp", "mlp"],
+                   help="Which model type(s) to train and evaluate "
+                        "(default: emlp mlp). Use 'all' for all 4 variants.")
     p.add_argument("--eval-size", type=int, default=200_000,
                    choices=[50_000, 200_000, 1_000_000])
     p.add_argument("--sizes", nargs="+", choices=["50k", "200k", "1m"],
                    default=None,
-                   help="Training set sizes to use (default: 50k 200k 1m). "
-                        "Example: --sizes 50k 200k")
+                   help="Training set sizes (default: 50k 200k 1m)")
     p.add_argument("--num-seeds", type=int, default=None,
-                   help="Number of seeds to use, starting from seed 0 "
-                        "(default: 3). Example: --num-seeds 1")
+                   help="Number of seeds (default: 3)")
     return p.parse_args()
 
 
@@ -69,6 +81,21 @@ def step_verify_group():
     verify_rotation_group()
 
 
+def step_verify_symmetry():
+    section("Step 2b: Print symmetry orbit statistics")
+    from cube_symmetry import (
+        ALL_COLOR_PERMS,
+        compute_spatial_pair_orbits,
+        compute_color_pair_orbits,
+    )
+    _, n_sp = compute_spatial_pair_orbits()
+    _, n_co = compute_color_pair_orbits()
+    print(f"Spatial pair orbits:  {n_sp}  (expect 10–40)")
+    print(f"Color pair orbits:    {n_co}  (always 2)")
+    print(f"Total kernel orbits:  {n_sp * n_co}  (= n_sp × 2)")
+    print(f"Full symmetry group:  24 × 720 = {24 * 720} elements")
+
+
 def step_bfs(skip_bfs):
     section("Step 3: BFS for optimal distances")
     from dataset import run_bfs, save_bfs_tables, load_bfs_tables, bfs_tables_exist
@@ -92,7 +119,7 @@ def step_generate_data(dist_table, skip_data, quick, train_sizes=None):
     section("Step 4: Generate datasets")
     from dataset import (
         generate_dataset, generate_test_dataset_stratified,
-        save_dataset, load_dataset, DATA_DIR,
+        save_dataset, DATA_DIR,
     )
     import numpy as np
     import os
@@ -110,18 +137,15 @@ def step_generate_data(dist_table, skip_data, quick, train_sizes=None):
         print("Skipping dataset generation (using existing files).")
         return TRAIN_SIZES
 
-    # Validation set
     val_path = os.path.join(DATA_DIR, "X_val.npy")
     if not os.path.exists(val_path):
         print(f"\nGenerating validation set ({VAL_SIZE:,} samples)...")
         rng = np.random.RandomState(100)
-        X_val, y_val_dist = generate_dataset(
-            VAL_SIZE, dist_table, rng=rng)
+        X_val, y_val_dist = generate_dataset(VAL_SIZE, dist_table, rng=rng)
         save_dataset(X_val, y_val_dist, "val")
     else:
         print("Validation set exists — skipping.")
 
-    # Test set
     test_path = os.path.join(DATA_DIR, "X_test.npy")
     if not os.path.exists(test_path):
         print(f"\nGenerating stratified test set (~{TEST_N_PER_DEPTH*12:,} samples)...")
@@ -132,15 +156,14 @@ def step_generate_data(dist_table, skip_data, quick, train_sizes=None):
     else:
         print("Test set exists — skipping.")
 
-    # Training sets
     for n_train in TRAIN_SIZES:
+        from train import size_label
         suffix = f"_{n_train // 1000}k"
         train_path = os.path.join(DATA_DIR, f"X_train{suffix}.npy")
         if not os.path.exists(train_path):
             print(f"\nGenerating training set ({n_train:,} samples)...")
             rng = np.random.RandomState(300 + n_train)
-            X_train, y_train_dist = generate_dataset(
-                n_train, dist_table, rng=rng)
+            X_train, y_train_dist = generate_dataset(n_train, dist_table, rng=rng)
             save_dataset(X_train, y_train_dist, "train", n_train)
         else:
             print(f"Train set ({n_train:,}) exists — skipping.")
@@ -148,7 +171,7 @@ def step_generate_data(dist_table, skip_data, quick, train_sizes=None):
     return TRAIN_SIZES
 
 
-def step_train(skip_train, model_filter, quick, train_sizes, num_seeds=None):
+def step_train(skip_train, model_types, quick, train_sizes, num_seeds=None):
     section("Step 5: Train models")
     from train import train_one, SEEDS, size_label
     import train as train_module
@@ -158,15 +181,13 @@ def step_train(skip_train, model_filter, quick, train_sizes, num_seeds=None):
         return
 
     if quick:
-        # Override training hyperparameters for quick test
         train_module.MAX_EPOCHS = 2
         train_module.EARLY_STOP_PATIENCE = 2
         seeds = [0]
     else:
         seeds = SEEDS if num_seeds is None else SEEDS[:num_seeds]
 
-    model_types = ["emlp", "mlp"] if model_filter == "all" else [model_filter]
-
+    print(f"Models: {model_types}")
     results = {}
     for model_type in model_types:
         for train_size in train_sizes:
@@ -183,14 +204,16 @@ def step_train(skip_train, model_filter, quick, train_sizes, num_seeds=None):
     if results:
         print("\nTraining summary:")
         for k, v in sorted(results.items()):
-            print(f"  {k:<35s}  best_val_mse={v:.4f}")
+            print(f"  {k:<45s}  best_val_mse={v:.4f}")
 
 
-def step_evaluate(eval_size, train_sizes):
+def step_evaluate(eval_size, train_sizes, model_types):
     section("Step 6: Evaluate and generate plots")
     from evaluate import run_full_evaluation
     try:
-        run_full_evaluation(train_size_for_detail=eval_size, train_sizes=train_sizes)
+        run_full_evaluation(train_size_for_detail=eval_size,
+                            train_sizes=train_sizes,
+                            model_types=model_types)
     except Exception as e:
         print(f"Evaluation error: {e}")
         import traceback
@@ -202,40 +225,45 @@ def step_evaluate(eval_size, train_sizes):
 def main():
     args = parse_args()
 
-    print("=" * 60)
-    print("  EMLP vs MLP — 2×2×2 Pocket Cube Experiment")
-    print("=" * 60)
+    # Resolve --model list (handle "all" shorthand)
+    if "all" in args.model:
+        model_types = ALL_MODEL_KEYS
+    else:
+        model_types = args.model
 
-    if args.quick:
-        print("\n[QUICK MODE] Using reduced dataset sizes and epochs.")
-
-    # Resolve --sizes flag to integer list
+    # Resolve --sizes
     _size_map = {"50k": 50_000, "200k": 200_000, "1m": 1_000_000}
     custom_sizes = [_size_map[s] for s in args.sizes] if args.sizes else None
 
+    print("=" * 60)
+    print("  Cube Value Network Experiment")
+    print("=" * 60)
+    print(f"  Models:  {model_types}")
+
+    if args.quick:
+        print("\n[QUICK MODE] Using reduced dataset sizes and epochs.")
     if custom_sizes:
-        print(f"\n[SIZES] Training set sizes: {[s // 1000 for s in custom_sizes]}k")
+        print(f"[SIZES] {[s // 1000 for s in custom_sizes]}k")
     if args.num_seeds:
-        print(f"[SEEDS] Using {args.num_seeds} seed(s) instead of 3")
+        print(f"[SEEDS] Using {args.num_seeds} seed(s)")
 
     t_start = time.time()
 
     step_verify_env()
     step_verify_group()
+    step_verify_symmetry()
 
     if not args.skip_data:
         dist_table, move_table = step_bfs(args.skip_bfs)
     else:
         dist_table, move_table = None, None
 
-    train_sizes = step_generate_data(
-        dist_table, args.skip_data, args.quick, custom_sizes)
+    train_sizes = step_generate_data(dist_table, args.skip_data, args.quick, custom_sizes)
 
-    step_train(args.skip_train, args.model, args.quick, train_sizes, args.num_seeds)
+    step_train(args.skip_train, model_types, args.quick, train_sizes, args.num_seeds)
 
-    # Use largest available size for detailed eval
     eval_size = args.eval_size if args.eval_size in train_sizes else train_sizes[-1]
-    step_evaluate(eval_size, train_sizes)
+    step_evaluate(eval_size, train_sizes, model_types)
 
     elapsed = time.time() - t_start
     print(f"\n{'='*60}")
