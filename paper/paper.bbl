@@ -1,4 +1,4 @@
-\begin{thebibliography}{9}
+\begin{thebibliography}{11}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -61,6 +61,19 @@ Stephen McAleer, Forest Agostinelli, Alexander Shmakov, and Pierre Baldi.
 \newblock Solving the rubik's cube with approximate policy iteration.
 \newblock In \emph{International Conference on Learning Representations
   (ICLR)}, 2019.
+
+\bibitem[Rokicki et~al.(2013)Rokicki, Kociemba, Davidson, and
+  Dethridge]{rokicki2014diameter}
+Tomas Rokicki, Herbert Kociemba, Morley Davidson, and John Dethridge.
+\newblock The diameter of the rubik's cube group is twenty.
+\newblock \emph{SIAM Journal on Discrete Mathematics}, 27\penalty0
+  (2):\penalty0 1082--1105, 2013.
+
+\bibitem[Scherphuis(2025)]{jaapsch2x2}
+Jaap Scherphuis.
+\newblock Pocket cube --- encyclopaedia of encyclopaedias.
+\newblock \url{https://www.jaapsch.net/puzzles/cube2.htm}, 2025.
+\newblock Accessed: 2025-03-29.
 
 \bibitem[Takano(2022)]{efficientcube}
 Kunga Takano.

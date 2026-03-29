@@ -92,7 +92,7 @@ that are critical for reliable beam-search guided solving.
 Combinatorial puzzles offer a clean testbed for evaluating how well neural
 networks exploit problem structure.
 Unlike most learning tasks where symmetry is approximate or data-driven,
-combinatorial puzzles often have \emph{exact}, group-theoretic symmetry baked
+combinatorial puzzles often have exact, group-theoretic symmetry baked
 into their definition—symmetry that, if ignored, forces a model to rediscover
 the same relationships from data across every equivalent configuration.
 
@@ -126,7 +126,7 @@ an equivariant model encodes them exactly by construction.
 A value network is only useful insofar as it guides a solver to the solved
 state.
 Recent work by Chervov et al.~\cite{chervov2025cayleypy} (the CayleyPy project)
-demonstrates that \emph{beam search guided by a learned distance heuristic}
+demonstrates that beam search guided by a learned distance heuristic
 is the most effective strategy for solving Rubik's cubes of all sizes,
 achieving 98.4\% optimality on the standard $3{\times}3{\times}3$ cube and
 surpassing all prior methods—including DeepCubeA \cite{agostinelli2019solving}
@@ -145,12 +145,12 @@ under a modest beam width.
 We make the following contributions:
 \begin{enumerate}
   \item We design a \textbf{Color-Equivariant Convolution layer}
-    (\textsc{ColorEquivConv}) that is jointly equivariant to
+    (\textsc{ColorConv}) that is jointly equivariant to
     $\mathcal{G} = \mathcal{O} \times S_6$, using a block-of-six channel
     structure to represent $S_6$ acting on the color dimension.
   \item We provide \textbf{formal proofs} of equivariance for both the
-    spatial-only layer (\textsc{GroupConv}) and the combined layer
-    (\textsc{ColorEquivConv}), and a corollary establishing invariance of
+    spatial-only layer (\textsc{SpatialConv}) and the combined layer
+    (\textsc{ColorConv}), and a corollary establishing invariance of
     the complete networks.
   \item We show that equivariance to $\mathcal{G}$ is equivalent to
     \textbf{implicit $17{,}280$-fold data augmentation}—a strictly stronger
@@ -161,18 +161,6 @@ We make the following contributions:
     gap''}: symmetry matters not just for average prediction accuracy but for
     the per-move ranking consistency that beam search depends on.
 \end{enumerate}
-
-\begin{figure}[t]
-  \centering
-  % Replace with an actual cube diagram if available
-  \fbox{\parbox{0.45\textwidth}{\centering\vspace{1cm}
-    [Figure: 2$\times$2$\times$2 cube with sticker labels]
-    \vspace{1cm}}}
-  \caption{The 2\texttimes2\texttimes2 Pocket Cube.
-    Each of the 24 sticker positions is assigned one of 6 colors.
-    The solved state has each face showing a single color.}
-  \label{fig:cube}
-\end{figure}
 
 % ── 2. Background ─────────────────────────────────────────────────────────────
 \section{Background}
@@ -190,9 +178,9 @@ We flatten $\bx$ to a vector of dimension $144$ as network input.
 
 The move set consists of six quarter-turn moves
 $\{R, R', U, U', F, F'\}$ in the quarter-turn metric (QTM).
-BFS over the Cayley graph of all reachable states establishes the
+BFS over the Cayley graph of all 3,674,160 reachable states establishes
 God's number: the maximum BFS distance is $d_{\max} = 14$ in QTM
-\cite{agostinelli2019solving}.
+\cite{jaapsch2x2, rokicki2014diameter}.
 The exact distance $d(\bx) \in \{0, 1, \ldots, 14\}$ for every state can
 be precomputed and stored in a lookup table, providing noiseless supervision
 for training a value network $f(\bx) \approx d(\bx)$.
@@ -261,7 +249,7 @@ The value network $f: \R^{144} \to \R$ should be $\mathcal{G}$-invariant.
 Equivariant networks build invariance or equivariance directly into the
 architecture by constraining layer weights via symmetry.
 The key idea, originating with group-equivariant CNNs
-\cite{cohen2016group}, is to use \emph{weight sharing} across orbits:
+\cite{cohen2016group}, is to use weight sharing across orbits:
 parameters shared across all group-equivalent input-output pairs.
 This simultaneously reduces the effective parameter count and guarantees
 exact symmetry.
@@ -300,7 +288,7 @@ structure in the architecture.
 The CayleyPy project \cite{chervov2025cayleypy} is the most directly relevant
 recent work to our evaluation methodology.
 Chervov et al.\ propose a general framework in which a neural network estimates
-a ``diffusion distance'' to the solved state, and \emph{beam search} of width
+a ``diffusion distance'' to the solved state, and beam search of width
 $W$ uses these estimates to maintain the $W$ most promising frontier states at
 each step.
 They demonstrate that this combination achieves 98.4\% optimality on the
@@ -337,10 +325,10 @@ $\mathcal{O} \times S_6$.
 \section{Method}
 \label{sec:method}
 
-\subsection{Spatial Group Convolution Layer (\textsc{GroupConv})}
+\subsection{Spatial Group Convolution Layer (\textsc{SpatialConv})}
 \label{sec:groupconv}
 
-The \textsc{GroupConv} layer maps a hidden state of shape
+The \textsc{SpatialConv} layer maps a hidden state of shape
 $(B, 24, c_{\mathrm{in}})$ to $(B, 24, c_{\mathrm{out}})$, where $B$
 is the batch dimension and the 24-position axis carries the sticker
 representation.
@@ -370,17 +358,17 @@ $c_{\mathrm{out}} \times c_{\mathrm{in}} \times 24 + c_{\mathrm{out}}$,
 compared to $c_{\mathrm{out}} \times c_{\mathrm{in}} \times 24^2$ for an
 unconstrained layer of the same width — a $24\times$ reduction.
 
-\subsection{Color-Equivariant Convolution Layer (\textsc{ColorEquivConv})}
+\subsection{Color-Equivariant Convolution Layer (\textsc{ColorConv})}
 \label{sec:colorconv}
 
-The \textsc{ColorEquivConv} layer is the main technical contribution of this
+The \textsc{ColorConv} layer is the main technical contribution of this
 paper.
-It extends \textsc{GroupConv} to the full group
+It extends \textsc{SpatialConv} to the full group
 $\mathcal{G} = \mathcal{O} \times S_6$.
 
 \paragraph{Block-of-six channel structure.}
 To enable $S_6$ to act naturally on the hidden representation, we organize
-channels in \emph{blocks of six}: a hidden state with $k$ blocks has
+channels in blocks of six: a hidden state with $k$ blocks has
 $6k$ total channels, grouped as a tensor of shape
 $(B, 24, k, 6)$, where the last axis carries a 6-dimensional representation
 of $S_6$.
@@ -438,7 +426,7 @@ Both our layers and the general EMLP framework of Finzi et al.\
 \cite{finzi2021practical} solve the same underlying mathematical problem:
 characterising the space of $G$-equivariant linear maps
 $\text{Hom}_G(V, W)$ between two group representations.
-They differ in \emph{how} that space is computed.
+They differ in how that space is computed.
 
 \paragraph{EMLP (Finzi et al.) — numerical approach.}
 For a group $G$ with generators $\{g_i\}$, the equivariance constraint
@@ -462,7 +450,7 @@ cost of constructing and factorising $C$, which has size
 $O(|V|^2 |W|^2)$.
 
 \paragraph{Orbit enumeration (our approach) — combinatorial approach.}
-For a \emph{finite} group acting by \emph{permutation}, the null space of
+For a finite group acting by permutation, the null space of
 $C$ has a direct combinatorial description: by Schur's lemma, the entry
 $L_{ij}$ depends only on the orbit of the pair $(i,j)$ under the group
 action.
@@ -482,31 +470,8 @@ null-space basis that EMLP would recover numerically.
 
 \paragraph{Equivalence and trade-offs.}
 For finite permutation representations the two approaches produce
-\emph{identical} equivariant function classes: the null space of $C$
+identical equivariant function classes: the null space of $C$
 equals the span of the orbit indicator matrices.
-Table~\ref{tab:emlp_comparison} summarises the key differences.
-
-\begin{table}[h]
-\centering
-\caption{Comparison of equivariant basis construction methods.}
-\label{tab:emlp_comparison}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{lll}
-\toprule
-& \textbf{EMLP (Finzi et al.)} & \textbf{Orbit enumeration (ours)} \\
-\midrule
-Mathematical object & $\mathrm{Hom}_G(V,W)$ & $\mathrm{Hom}_G(V,W)$ \\
-Method & Null space via SVD/Krylov & Exhaustive group enumeration \\
-Basis vectors & Numerical (from SVD) & Orbit indicator matrices \\
-Interpretability & Low & High (one weight per orbit) \\
-Continuous groups & \checkmark & $\times$ \\
-Permutation repns & \checkmark & \checkmark \\
-Constraint matrix size & $O(|V|^2|W|^2)$ & — (no matrix needed) \\
-Setup cost (our cube) & $576{\times}576$ system & 24 group-element lookups \\
-\bottomrule
-\end{tabular}
-\end{table}
-
 For the 2\texttimes2\texttimes2 cube, $G = \mathcal{O}$ has only 24 elements
 acting on 24 sticker positions.
 Orbit enumeration computes all pair orbits in milliseconds with zero
@@ -520,7 +485,7 @@ in 3D space) or when the representation is not a simple permutation action.
 Both networks end with an invariant pooling head that reduces the
 equivariant representation to a scalar.
 
-\paragraph{InvariantLinear (for \textsc{EMLP}).}
+\paragraph{Spatial pooling (for \textsc{EMLP}).}
 Average over the 24 position axis, then apply a linear projection:
 \begin{equation}
   f(\bx) = \mathbf{w}^\top \!\left(\frac{1}{24}\sum_{i=1}^{24} \bh_i\right) + b,
@@ -528,7 +493,7 @@ Average over the 24 position axis, then apply a linear projection:
   \label{eq:invlinear}
 \end{equation}
 
-\paragraph{InvariantHead (for \textsc{EMLP-Col}).}
+\paragraph{Spatial + color pooling (for \textsc{EMLP-Col}).}
 Average over both the 24 positions and the 6 colors within each block,
 then apply a linear projection:
 \begin{equation}
@@ -560,9 +525,9 @@ Table~\ref{tab:results}.}
 \textbf{Model} & \textbf{Layer type} & \textbf{Width} & \textbf{Params} &
   \textbf{Symmetry} & \textbf{Role} \\
 \midrule
-\textsc{EMLP}     & \textsc{GroupConv}      & $c=28$ & $\sim$42K &
+\textsc{EMLP}     & \textsc{SpatialConv}      & $c=28$ & $\sim$42K &
   $\mathcal{O}$             & Spatial equivariance \\
-\textsc{EMLP-Col} & \textsc{ColorEquivConv} & $k=20$ & $\sim$39K &
+\textsc{EMLP-Col} & \textsc{ColorConv} & $k=20$ & $\sim$39K &
   $\mathcal{O} \times S_6$  & Spatial + color equivariance \\
 \textsc{MLP}      & Linear                  & $h=110$& $\sim$40K &
   None                      & Parameter-matched baseline \\
@@ -608,14 +573,14 @@ variance.
 \section{Theoretical Analysis}
 \label{sec:theory}
 
-\subsection{Equivariance of \textsc{GroupConv}}
+\subsection{Equivariance of \textsc{SpatialConv}}
 
-\begin{proposition}[\textsc{GroupConv} is $\mathcal{O}$-equivariant]
+\begin{proposition}[\textsc{SpatialConv} is $\mathcal{O}$-equivariant]
 \label{prop:groupconv}
 Let $\pi \in \mathcal{O}$ act on sticker positions.
 For any input $\bx \in \R^{B \times 24 \times c_{\mathrm{in}}}$,
 \begin{equation}
-  \textsc{GroupConv}(\pi \cdot \bx) = \pi \cdot \textsc{GroupConv}(\bx),
+  \textsc{SpatialConv}(\pi \cdot \bx) = \pi \cdot \textsc{SpatialConv}(\bx),
 \end{equation}
 where $[\pi \cdot \bx]_{b,i,c} = x_{b,\pi^{-1}(i),c}$ on the input
 and $[\pi \cdot \by]_{b,i,o} = y_{b,\pi^{-1}(i),o}$ on the output.
@@ -634,9 +599,9 @@ for all $j' \in \{1,\ldots,24\}$.
 the group element $\pi^{-1}$: $\pi^{-1}(i) = \pi^{-1}(i)$ and
 $\pi^{-1}(\pi(j')) = j'$.)
 
-We compute the $i$-th output of $\textsc{GroupConv}(\pi \cdot \bx)$:
+We compute the $i$-th output of $\textsc{SpatialConv}(\pi \cdot \bx)$:
 \begin{align}
-  \left[\textsc{GroupConv}(\pi \cdot \bx)\right]_{b,i,o}
+  \left[\textsc{SpatialConv}(\pi \cdot \bx)\right]_{b,i,o}
   &= \sum_{j=1}^{24} \sum_{c=1}^{c_{\mathrm{in}}}
      W_{o,c,\,\orbsp(i,j)} \cdot [\pi \cdot \bx]_{b,j,c} \notag \\
   &= \sum_{j=1}^{24} \sum_{c=1}^{c_{\mathrm{in}}}
@@ -650,30 +615,30 @@ ranges over all 24 positions):
   &\overset{\eqref{eq:orbit_invariance}}{=}
      \sum_{j'=1}^{24} \sum_{c=1}^{c_{\mathrm{in}}}
      W_{o,c,\,\orbsp(\pi^{-1}(i),\,j')} \cdot x_{b,j',c} \notag \\
-  &= \left[\textsc{GroupConv}(\bx)\right]_{b,\pi^{-1}(i),o}
-   = \left[\pi \cdot \textsc{GroupConv}(\bx)\right]_{b,i,o}. \qedhere
+  &= \left[\textsc{SpatialConv}(\bx)\right]_{b,\pi^{-1}(i),o}
+   = \left[\pi \cdot \textsc{SpatialConv}(\bx)\right]_{b,i,o}. \qedhere
 \end{align}
 \end{proof}
 
-\subsection{Equivariance of \textsc{ColorEquivConv}}
+\subsection{Equivariance of \textsc{ColorConv}}
 
-\begin{theorem}[\textsc{ColorEquivConv} is $\mathcal{G}$-equivariant]
+\begin{theorem}[\textsc{ColorConv} is $\mathcal{G}$-equivariant]
 \label{thm:colorconv}
 Let $(g, \sigma) \in \mathcal{G} = \mathcal{O} \times S_6$ act as in
 \eqref{eq:hidden_action}.
 For any input $\bx \in \R^{B \times 24 \times k_{\mathrm{in}} \times 6}$,
 \begin{equation}
-  \textsc{ColorEquivConv}\!\left((g,\sigma) \cdot \bx\right)
-  = (g,\sigma) \cdot \textsc{ColorEquivConv}(\bx).
+  \textsc{ColorConv}\!\left((g,\sigma) \cdot \bx\right)
+  = (g,\sigma) \cdot \textsc{ColorConv}(\bx).
 \end{equation}
 \end{theorem}
 
 \begin{proof}
 Fix $b, i, o, d$.
 We compute the $(i, o, d)$-th output of
-$\textsc{ColorEquivConv}\!\left((g, \sigma) \cdot \bx\right)$:
+$\textsc{ColorConv}\!\left((g, \sigma) \cdot \bx\right)$:
 \begin{align}
-  \left[\textsc{ColorEquivConv}\!\left((g,\sigma)\cdot\bx\right)\right]_{b,i,o,d}
+  \left[\textsc{ColorConv}\!\left((g,\sigma)\cdot\bx\right)\right]_{b,i,o,d}
   &= \sum_{j,\kappa,c} K_{o,\kappa,i,j,d,c}
      \cdot \left[(g,\sigma)\cdot\bx\right]_{b,j,\kappa,c} \notag \\
   &= \sum_{j,\kappa,c} W_{o,\kappa,\orbsp(i,j),\orbco(d,c)}
@@ -714,8 +679,8 @@ Substituting both simplifications into \eqref{eq:proof_step}:
 \begin{align}
   &= \sum_{j',\kappa,c'} W_{o,\kappa,\,\orbsp(g^{-1}(i),\,j'),\,\orbco(\sigma^{-1}(d),\,c')}
      \cdot x_{b,j',\kappa,c'} \notag \\
-  &= \left[\textsc{ColorEquivConv}(\bx)\right]_{b,\,g^{-1}(i),\,o,\,\sigma^{-1}(d)} \notag \\
-  &= \left[(g,\sigma)\cdot\textsc{ColorEquivConv}(\bx)\right]_{b,i,o,d}. \qedhere
+  &= \left[\textsc{ColorConv}(\bx)\right]_{b,\,g^{-1}(i),\,o,\,\sigma^{-1}(d)} \notag \\
+  &= \left[(g,\sigma)\cdot\textsc{ColorConv}(\bx)\right]_{b,i,o,d}. \qedhere
 \end{align}
 \end{proof}
 
@@ -758,7 +723,7 @@ $f$ automatically satisfies
   \mathcal{L}\!\left(f\!\left((g,\sigma)\cdot\bx^{(n)}\right),\, y^{(n)}\right)
   = \mathcal{L}\!\left(f(\bx^{(n)}),\, y^{(n)}\right)
 \end{equation}
-for \emph{all} $(g, \sigma) \in \mathcal{G}$—a total of $17{,}280$ equivalent
+for all $(g, \sigma) \in \mathcal{G}$—a total of $17{,}280$ equivalent
 training examples per sample, with no additional computation.
 \end{proposition}
 
@@ -771,7 +736,7 @@ $f((g,\sigma)\cdot\bx^{(n)}) = f(\bx^{(n)})$.
 Explicit data augmentation (as in \textsc{MLP-Aug}) randomly samples a
 subset of $\mathcal{G}$ each iteration and applies the transformations
 to the batch.
-This provides \emph{approximate} coverage of $\mathcal{G}$ in expectation,
+This provides approximate coverage of $\mathcal{G}$ in expectation,
 but is strictly weaker than built-in equivariance in three ways:
 (1) coverage is stochastic, not exact;
 (2) a finite-capacity model may fail to generalize from augmented examples;
@@ -781,7 +746,7 @@ whereas equivariance is free at inference time.
 
 \subsection{Parameter Efficiency}
 
-The weight tensor of \textsc{ColorEquivConv} has
+The weight tensor of \textsc{ColorConv} has
 $k_{\mathrm{out}} \times k_{\mathrm{in}} \times n_{\mathrm{sp}} \times 2$
 parameters.
 An unconstrained linear layer with the same input and output dimensionality
@@ -804,6 +769,22 @@ in the equivariant function class.
 % ── 5. Experiments ────────────────────────────────────────────────────────────
 \section{Experiments}
 \label{sec:experiments}
+
+\subsection{Experimental Design}
+
+Our experiment is a controlled comparison: we fix the training data
+(200K stratified samples), optimizer (Adam with cosine schedule), network
+depth (3 hidden layers with ReLU), and approximate parameter count
+(${\sim}$40K) across all three models.
+The only variable that differs between models is the symmetry
+constraint imposed on the weight tensor: none (\textsc{MLP}), spatial
+rotations (\textsc{EMLP}), or spatial rotations plus color permutations
+(\textsc{EMLP-Col}).
+This isolation allows us to attribute performance differences directly to
+the equivariance structure rather than to model capacity, optimization, or
+data quantity.
+Each configuration is trained with 3 independent random seeds (42, 43, 44)
+to estimate variance.
 
 \subsection{Evaluation Metrics}
 
@@ -893,7 +874,7 @@ $r = 0.81$ yet a 0.0\% beam-search solve rate at every depth (see
 Table~\ref{tab:results} footnote), demonstrating that global accuracy metrics
 alone do not predict solver performance.
 The equivariant models' consistent value landscapes — guaranteed by
-Corollary~\ref{thm:colorconv} — provide the per-move ranking reliability
+Corollary~\ref{cor:invariance} — provide the per-move ranking reliability
 that beam search requires.
 
 \paragraph{Finding 3: Color equivariance adds value over spatial-only.}
@@ -906,48 +887,6 @@ channels, provides a measurable benefit at negligible extra parameter cost —
 consistent with Proposition~\ref{prop:augmentation}, which shows that a
 larger symmetry group yields stronger implicit data augmentation.
 
-\subsection{Plots}
-
-\begin{figure}[h]
-  \centering
-  \begin{subfigure}[b]{0.48\textwidth}
-    \centering
-    % \includegraphics[width=\textwidth]{../results/plots/learning_curves.png}
-    \fbox{\parbox{\textwidth}{\centering\vspace{1.5cm}[Learning curves]\vspace{1.5cm}}}
-    \caption{Validation MSE vs.\ epoch (200K training set).}
-    \label{fig:learning_curves}
-  \end{subfigure}
-  \hfill
-  \begin{subfigure}[b]{0.48\textwidth}
-    \centering
-    % \includegraphics[width=\textwidth]{../results/plots/per_depth_accuracy.png}
-    \fbox{\parbox{\textwidth}{\centering\vspace{1.5cm}[Per-depth MAE]\vspace{1.5cm}}}
-    \caption{MAE broken down by BFS depth.}
-    \label{fig:per_depth}
-  \end{subfigure}
-  \caption{Training dynamics and per-depth prediction error.}
-\end{figure}
-
-\begin{figure}[h]
-  \centering
-  \begin{subfigure}[b]{0.48\textwidth}
-    \centering
-    % \includegraphics[width=\textwidth]{../results/plots/solve_rates.png}
-    \fbox{\parbox{\textwidth}{\centering\vspace{1.5cm}[Solve rates]\vspace{1.5cm}}}
-    \caption{Greedy solve rate by scramble depth.}
-    \label{fig:solve_rates}
-  \end{subfigure}
-  \hfill
-  \begin{subfigure}[b]{0.48\textwidth}
-    \centering
-    % \includegraphics[width=\textwidth]{../results/plots/equivariance_error.png}
-    \fbox{\parbox{\textwidth}{\centering\vspace{1.5cm}[Equivariance error]\vspace{1.5cm}}}
-    \caption{Equivariance error by symmetry type (log scale).}
-    \label{fig:equiv_error}
-  \end{subfigure}
-  \caption{Solve performance and symmetry measurement.}
-\end{figure}
-
 % ── 6. Discussion ─────────────────────────────────────────────────────────────
 \section{Discussion}
 \label{sec:discussion}
@@ -956,44 +895,61 @@ larger symmetry group yields stronger implicit data augmentation.
 The greedy solver makes a sequence of local decisions: at each step, it
 evaluates six successor states and picks the one with the lowest predicted
 distance.
-Even a model with high global correlation can fail if its predictions are
-inconsistent across symmetry-equivalent states: two physically identical
+Even a model with reasonable global correlation can fail if its predictions
+are inconsistent across symmetry-equivalent states: two physically identical
 positions (related by a rotation) may receive different predicted distances,
-causing the solver to cycle.
+causing the solver to cycle or take suboptimal paths.
 By contrast, \textsc{EMLP} and \textsc{EMLP-Col} guarantee
 $f(\pi \cdot \bx) = f(\bx)$ for all $\pi \in \mathcal{O}$ (resp.\
 $(g, \sigma) \in \mathcal{G}$).
 This consistency is not captured by Pearson $r$ or MAE, but is critical for
 reliable search.
+This phenomenon is starkly illustrated by the supplementary baselines:
+the large \textsc{MLP} (${\sim}$169K parameters) achieves Pearson $r = 0.81$
+yet a 0\% beam-search solve rate at every depth—demonstrating that even
+$4\times$ more parameters cannot compensate for the lack of built-in symmetry.
 Our finding aligns with the characterization in Chervov et al.\
 \cite{chervov2025cayleypy}: beam search ``compensates for any possible
-incorrectness in the neural network predictions,'' but only up to a point.
-When the heuristic is so inconsistent that successor rankings are essentially
-random—as with our \textsc{MLP} ($r = 0.81$ globally but 0\% solve rate)—beam
-search cannot recover.
+incorrectness in the neural network predictions,'' but only when the
+heuristic maintains consistent local rankings across equivalent states.
 The implicit 17,280-fold consistency enforced by equivariance provides exactly
-the reliable local ranking that beam search requires.
+this guarantee.
 
 \paragraph{The role of color symmetry.}
 The $S_6$ group is substantially larger than $\mathcal{O}$ (720 vs.\ 24
 elements), yet acts on a low-dimensional space (6 colors), resulting in
 only 2 color pair orbits.
-This makes the \textsc{ColorEquivConv} layer remarkably compact: the color
+This makes the \textsc{ColorConv} layer remarkably compact: the color
 symmetry is captured by a single binary parameter (same vs.\ different color)
 per spatial orbit.
 The gain over spatial-only \textsc{EMLP} suggests that color relabeling
 invariance is a non-trivial inductive bias for this problem, even though
 all six colors are symmetric in the training data.
 
-\paragraph{Limitations.}
-The current experiments use only the 2\texttimes2\texttimes2 cube with
-a 200K training set, limiting generalizability of the conclusions.
-The \textsc{MLP-Aug} results may be affected by the interaction between
-small capacity ($h = 110$) and heavy augmentation (full $\mathcal{G}$
-sampling), making it difficult to isolate the effect of augmentation alone.
-Additionally, the greedy search with beam width 20 is a relatively weak
-solver; comparison under A* or MCTS \cite{agostinelli2019solving} would
-provide a more comprehensive picture.
+\paragraph{Threats to validity.}
+Several factors limit the generalizability of our conclusions:
+\begin{itemize}
+  \item \textbf{Single puzzle.} We evaluate only the 2\texttimes2\texttimes2
+    cube. While this provides exact ground-truth distances, the small state
+    space (3.7M states) may overstate the benefits of equivariance compared
+    to larger cubes where data coverage is necessarily sparser.
+  \item \textbf{Limited seeds.} Three random seeds (42, 43, 44) provide a
+    rough variance estimate but not statistically rigorous confidence
+    intervals.
+  \item \textbf{Fixed hyperparameters.} We use the same optimizer (Adam),
+    learning rate schedule, and depth (3 layers) for all models.
+    The \textsc{MLP} may benefit from a different hyperparameter
+    configuration (e.g., deeper networks, dropout, or different learning
+    rates); we did not perform a hyperparameter search per model type.
+  \item \textbf{Beam width.} A narrow beam ($W = 20$) intentionally
+    stress-tests heuristic quality, but it means that a sufficiently wide
+    beam might close the gap between equivariant and unconstrained models.
+  \item \textbf{Supplementary baselines.} The augmented \textsc{MLP-Aug}
+    ($h = 110$) may be affected by the interaction between small capacity
+    and heavy augmentation (sampling from $|\mathcal{G}| = 17{,}280$
+    transformations), making it difficult to isolate the effect of
+    augmentation alone from that result.
+\end{itemize}
 
 \paragraph{Future work.}
 The equivariant architecture scales naturally to larger cubes: the
@@ -1001,7 +957,10 @@ The equivariant architecture scales naturally to larger cubes: the
 where data efficiency gains should be even more pronounced.
 Incorporating the equivariant value network into tree search (A*, MCTS)
 would allow evaluation on harder scrambles and comparison with state-of-the-art
-solvers.
+solvers such as CayleyPy \cite{chervov2025cayleypy}.
+A hyperparameter search per model type would strengthen the fairness of the
+comparison, as would evaluating across multiple training set sizes to
+characterize data efficiency more precisely.
 
 % ── 7. Conclusion ─────────────────────────────────────────────────────────────
 \section{Conclusion}
@@ -1017,13 +976,14 @@ We formally proved that both architectures are exactly invariant to their
 respective symmetry groups, and established that equivariance is equivalent
 to implicit 17,280-fold data augmentation with zero computational overhead.
 
-Empirically, \textsc{EMLP-Col} achieves a 97.2\% greedy solve rate at
-scramble depth 10 with only 39K parameters, compared to 0.0\% for an
-unconstrained MLP with $4\times$ more parameters.
-A key insight is that equivariance matters for \emph{local consistency} of
-the value landscape, not just average prediction accuracy: the MLP achieves
-Pearson $r = 0.81$ yet completely fails at greedy search, while equivariant
-models with similar MAE succeed reliably.
+In a controlled comparison at equal parameter count (${\sim}$40K), both
+equivariant models substantially outperform the unconstrained \textsc{MLP}
+baseline, with \textsc{EMLP-Col} achieving a 97.2\% greedy solve rate at
+scramble depth 10 and \textsc{EMLP} achieving 94.2\%.
+A key insight is that equivariance matters for local consistency of
+the value landscape, not just average prediction accuracy: a supplementary
+large \textsc{MLP} with $4\times$ more parameters achieves Pearson
+$r = 0.81$ yet 0\% solve rate, while equivariant models succeed reliably.
 
 These results suggest that explicitly encoding known symmetry structure into
 neural network architectures is particularly beneficial for search-based
