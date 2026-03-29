@@ -16,141 +16,138 @@
 \citation{agostinelli2019solving}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:intro}{{1}{1}{Introduction}{section.1}{}}
-\@writefile{toc}{\contentsline {paragraph}{Two symmetries of the cube.}{1}{section*.1}\protected@file@percent }
 \citation{chervov2025cayleypy}
 \citation{agostinelli2019solving}
 \citation{efficientcube}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces The 2\texttimes 2\texttimes 2 Pocket Cube. Each of the 24 sticker positions is assigned one of 6 colors. The solved state has each face showing a single color.\relax }}{2}{figure.caption.4}\protected@file@percent }
-\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:cube}{{1}{2}{The 2\texttimes 2\texttimes 2 Pocket Cube. Each of the 24 sticker positions is assigned one of 6 colors. The solved state has each face showing a single color.\relax }{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Two symmetries of the cube.}{2}{section*.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Beam search as the evaluation criterion.}{2}{section*.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Contributions.}{2}{section*.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {2}Background}{2}{section.2}\protected@file@percent }
-\newlabel{sec:background}{{2}{2}{Background}{section.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}The 2\texttimes 2\texttimes 2 Pocket Cube}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Paper structure.}{2}{section*.4}\protected@file@percent }
 \citation{jaapsch2x2,rokicki2014diameter}
-\citation{cohen2016group}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Top: the 2\texttimes 2\texttimes 2 Pocket Cube, its unfolded sticker representation, one-hot encoding $\mathbf  {x}\in \mathbb  {R}^{144}$, and the value network $f(\mathbf  {x})$ predicting BFS distance. Bottom: the two symmetry groups exploited in this work — spatial rotations $\mathcal  {O}$ (order 24) and color permutations $S_6$ (order 720) — both of which leave BFS distance invariant.\relax }}{3}{figure.caption.5}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:cube}{{1}{3}{Top: the 2\texttimes 2\texttimes 2 Pocket Cube, its unfolded sticker representation, one-hot encoding $\bx \in \R ^{144}$, and the value network $f(\bx )$ predicting BFS distance. Bottom: the two symmetry groups exploited in this work — spatial rotations $\mathcal {O}$ (order 24) and color permutations $S_6$ (order 720) — both of which leave BFS distance invariant.\relax }{figure.caption.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Background}{3}{section.2}\protected@file@percent }
+\newlabel{sec:background}{{2}{3}{Background}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}The 2\texttimes 2\texttimes 2 Pocket Cube}{3}{subsection.2.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Group Theory}{3}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{The rotation group $\mathcal  {O}$.}{3}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{The rotation group $\mathcal  {O}$.}{3}{section*.6}\protected@file@percent }
 \newlabel{eq:spatial_action}{{1}{3}{The rotation group $\mathcal {O}$}{equation.2.1}{}}
-\@writefile{toc}{\contentsline {paragraph}{The color permutation group $S_6$.}{3}{section*.6}\protected@file@percent }
-\newlabel{eq:color_action}{{2}{3}{The color permutation group $S_6$}{equation.2.2}{}}
-\@writefile{toc}{\contentsline {paragraph}{The combined group $\mathcal  {G} = \mathcal  {O} \times S_6$.}{3}{section*.7}\protected@file@percent }
-\newlabel{eq:combined_action}{{3}{3}{The combined group $\mathcal {G} = \mathcal {O} \times S_6$}{equation.2.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Equivariant Neural Networks}{3}{subsection.2.3}\protected@file@percent }
+\citation{cohen2016group}
 \citation{agostinelli2019solving}
 \citation{mcaleer2019solving}
 \citation{chervov2025cayleypy}
+\@writefile{toc}{\contentsline {paragraph}{The color permutation group $S_6$.}{4}{section*.7}\protected@file@percent }
+\newlabel{eq:color_action}{{2}{4}{The color permutation group $S_6$}{equation.2.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{The combined group $\mathcal  {G} = \mathcal  {O} \times S_6$.}{4}{section*.8}\protected@file@percent }
+\newlabel{eq:combined_action}{{3}{4}{The combined group $\mathcal {G} = \mathcal {O} \times S_6$}{equation.2.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Equivariant Neural Networks}{4}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Pair orbits.}{4}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Related Work}{4}{section.3}\protected@file@percent }
+\newlabel{sec:related}{{3}{4}{Related Work}{section.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Neural solvers for Rubik's cubes.}{4}{section*.10}\protected@file@percent }
 \citation{cohen2016group}
 \citation{finzi2021practical}
 \citation{kondor2018generalization}
 \citation{maron2020learning}
-\@writefile{toc}{\contentsline {paragraph}{Pair orbits.}{4}{section*.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Related Work}{4}{section.3}\protected@file@percent }
-\newlabel{sec:related}{{3}{4}{Related Work}{section.3}{}}
-\@writefile{toc}{\contentsline {paragraph}{Neural solvers for Rubik's cubes.}{4}{section*.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Beam search with learned heuristics.}{4}{section*.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Equivariant networks for combinatorial structures.}{4}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Beam search with learned heuristics.}{5}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Equivariant networks for combinatorial structures.}{5}{section*.12}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {4}Method}{5}{section.4}\protected@file@percent }
 \newlabel{sec:method}{{4}{5}{Method}{section.4}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Spatial Group Convolution Layer (\textsc  {SpatialConv})}{5}{subsection.4.1}\protected@file@percent }
 \newlabel{sec:groupconv}{{4.1}{5}{Spatial Group Convolution Layer (\textsc {SpatialConv})}{subsection.4.1}{}}
-\@writefile{toc}{\contentsline {paragraph}{Weight sharing.}{5}{section*.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Forward pass.}{5}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Weight sharing.}{5}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Forward pass.}{5}{section*.14}\protected@file@percent }
 \newlabel{eq:groupconv_forward}{{6}{5}{Forward pass}{equation.4.6}{}}
-\@writefile{toc}{\contentsline {paragraph}{Parameter count.}{5}{section*.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Parameter count.}{5}{section*.15}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Color-Equivariant Convolution Layer (\textsc  {ColorConv})}{5}{subsection.4.2}\protected@file@percent }
 \newlabel{sec:colorconv}{{4.2}{5}{Color-Equivariant Convolution Layer (\textsc {ColorConv})}{subsection.4.2}{}}
-\@writefile{toc}{\contentsline {paragraph}{Block-of-six channel structure.}{5}{section*.15}\protected@file@percent }
-\newlabel{eq:hidden_action}{{7}{5}{Block-of-six channel structure}{equation.4.7}{}}
-\@writefile{toc}{\contentsline {paragraph}{Color pair orbits.}{5}{section*.16}\protected@file@percent }
-\newlabel{eq:color_orbits}{{8}{5}{Color pair orbits}{equation.4.8}{}}
-\@writefile{toc}{\contentsline {paragraph}{Weight tensor and kernel expansion.}{5}{section*.17}\protected@file@percent }
-\newlabel{eq:colorconv_kernel}{{9}{5}{Weight tensor and kernel expansion}{equation.4.9}{}}
 \citation{finzi2021practical}
-\@writefile{toc}{\contentsline {paragraph}{Forward pass.}{6}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Block-of-six channel structure.}{6}{section*.16}\protected@file@percent }
+\newlabel{eq:hidden_action}{{7}{6}{Block-of-six channel structure}{equation.4.7}{}}
+\@writefile{toc}{\contentsline {paragraph}{Color pair orbits.}{6}{section*.17}\protected@file@percent }
+\newlabel{eq:color_orbits}{{8}{6}{Color pair orbits}{equation.4.8}{}}
+\@writefile{toc}{\contentsline {paragraph}{Weight tensor and kernel expansion.}{6}{section*.18}\protected@file@percent }
+\newlabel{eq:colorconv_kernel}{{9}{6}{Weight tensor and kernel expansion}{equation.4.9}{}}
+\@writefile{toc}{\contentsline {paragraph}{Forward pass.}{6}{section*.19}\protected@file@percent }
 \newlabel{eq:colorconv_forward}{{10}{6}{Forward pass}{equation.4.10}{}}
-\@writefile{toc}{\contentsline {paragraph}{Parameter count.}{6}{section*.19}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Parameter count.}{6}{section*.20}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Comparison with the General EMLP Framework}{6}{subsection.4.3}\protected@file@percent }
 \newlabel{sec:emlp_comparison}{{4.3}{6}{Comparison with the General EMLP Framework}{subsection.4.3}{}}
-\@writefile{toc}{\contentsline {paragraph}{EMLP (Finzi et al.) — numerical approach.}{6}{section*.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{EMLP (Finzi et al.) — numerical approach.}{6}{section*.21}\protected@file@percent }
 \newlabel{eq:emlp_constraint}{{11}{6}{EMLP (Finzi et al.) — numerical approach}{equation.4.11}{}}
-\@writefile{toc}{\contentsline {paragraph}{Orbit enumeration (our approach) — combinatorial approach.}{6}{section*.21}\protected@file@percent }
-\newlabel{eq:orbit_enum}{{12}{6}{Orbit enumeration (our approach) — combinatorial approach}{equation.4.12}{}}
-\@writefile{toc}{\contentsline {paragraph}{Equivalence and trade-offs.}{6}{section*.22}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Invariant Pooling Heads}{6}{subsection.4.4}\protected@file@percent }
-\citation{kingma2015adam}
-\@writefile{toc}{\contentsline {paragraph}{Spatial pooling (for \textsc  {EMLP}).}{7}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Orbit enumeration (our approach) — combinatorial approach.}{7}{section*.22}\protected@file@percent }
+\newlabel{eq:orbit_enum}{{12}{7}{Orbit enumeration (our approach) — combinatorial approach}{equation.4.12}{}}
+\@writefile{toc}{\contentsline {paragraph}{Equivalence and trade-offs.}{7}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Invariant Pooling Heads}{7}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Spatial pooling (for \textsc  {EMLP}).}{7}{section*.24}\protected@file@percent }
 \newlabel{eq:invlinear}{{13}{7}{Spatial pooling (for \textsc {EMLP})}{equation.4.13}{}}
-\@writefile{toc}{\contentsline {paragraph}{Spatial + color pooling (for \textsc  {EMLP-Col}).}{7}{section*.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Spatial + color pooling (for \textsc  {EMLP-Col}).}{7}{section*.25}\protected@file@percent }
 \newlabel{eq:invhead}{{14}{7}{Spatial + color pooling (for \textsc {EMLP-Col})}{equation.4.14}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Full Model Architectures}{7}{subsection.4.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces The three model architectures compared in this work. All models use 3 hidden layers with ReLU activations. Parameter counts use widths $c=28$ (\textsc  {EMLP}), $k=20$ (\textsc  {EMLP-Col}), $h=110$ (\textsc  {MLP}). $^\dagger $Two additional baselines were evaluated but are not the primary focus: an augmented \textsc  {MLP} (\textsc  {MLP-Aug}, $h=110$, ${\sim }$40K) and a large unconstrained \textsc  {MLP} ($h=256$, ${\sim }$169K); see footnote in Table\nobreakspace  {}\ref {tab:results}.\relax }}{7}{table.caption.25}\protected@file@percent }
-\newlabel{tab:models}{{1}{7}{The three model architectures compared in this work. All models use 3 hidden layers with ReLU activations. Parameter counts use widths $c=28$ (\textsc {EMLP}), $k=20$ (\textsc {EMLP-Col}), $h=110$ (\textsc {MLP}). $^\dagger $Two additional baselines were evaluated but are not the primary focus: an augmented \textsc {MLP} (\textsc {MLP-Aug}, $h=110$, ${\sim }$40K) and a large unconstrained \textsc {MLP} ($h=256$, ${\sim }$169K); see footnote in Table~\ref {tab:results}.\relax }{table.caption.25}{}}
-\@writefile{toc}{\contentsline {paragraph}{Input/output.}{7}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Input/output.}{7}{section*.27}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Training Setup}{7}{subsection.4.6}\protected@file@percent }
 \newlabel{sec:training}{{4.6}{7}{Training Setup}{subsection.4.6}{}}
-\@writefile{toc}{\contentsline {paragraph}{Dataset.}{7}{section*.27}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Objective.}{7}{section*.28}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Optimization.}{7}{section*.29}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dataset.}{7}{section*.28}\protected@file@percent }
+\citation{kingma2015adam}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces The three model architectures compared in this work. All models use 3 hidden layers with ReLU activations. Parameter counts use widths $c=28$ (\textsc  {EMLP}), $k=20$ (\textsc  {EMLP-Col}), $h=110$ (\textsc  {MLP}). $^\dagger $Two additional baselines were evaluated but are not the primary focus: an augmented \textsc  {MLP} (\textsc  {MLP-Aug}, $h=110$, ${\sim }$40K) and a large unconstrained \textsc  {MLP} ($h=256$, ${\sim }$169K); see footnote in Table\nobreakspace  {}\ref {tab:results}.\relax }}{8}{table.caption.26}\protected@file@percent }
+\newlabel{tab:models}{{1}{8}{The three model architectures compared in this work. All models use 3 hidden layers with ReLU activations. Parameter counts use widths $c=28$ (\textsc {EMLP}), $k=20$ (\textsc {EMLP-Col}), $h=110$ (\textsc {MLP}). $^\dagger $Two additional baselines were evaluated but are not the primary focus: an augmented \textsc {MLP} (\textsc {MLP-Aug}, $h=110$, ${\sim }$40K) and a large unconstrained \textsc {MLP} ($h=256$, ${\sim }$169K); see footnote in Table~\ref {tab:results}.\relax }{table.caption.26}{}}
+\@writefile{toc}{\contentsline {paragraph}{Objective.}{8}{section*.29}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Optimization.}{8}{section*.30}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {5}Theoretical Analysis}{8}{section.5}\protected@file@percent }
 \newlabel{sec:theory}{{5}{8}{Theoretical Analysis}{section.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Equivariance of \textsc  {SpatialConv}}{8}{subsection.5.1}\protected@file@percent }
 \newlabel{prop:groupconv}{{5.1}{8}{\textsc {SpatialConv} is $\mathcal {O}$-equivariant}{theorem.5.1}{}}
 \newlabel{eq:orbit_invariance}{{17}{8}{Equivariance of \textsc {SpatialConv}}{equation.5.17}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Equivariance of \textsc  {ColorConv}}{8}{subsection.5.2}\protected@file@percent }
-\newlabel{thm:colorconv}{{5.2}{8}{\textsc {ColorConv} is $\mathcal {G}$-equivariant}{theorem.5.2}{}}
-\newlabel{eq:proof_step}{{21}{8}{Equivariance of \textsc {ColorConv}}{equation.5.21}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Equivariance of \textsc  {ColorConv}}{9}{subsection.5.2}\protected@file@percent }
+\newlabel{thm:colorconv}{{5.2}{9}{\textsc {ColorConv} is $\mathcal {G}$-equivariant}{theorem.5.2}{}}
+\newlabel{eq:proof_step}{{21}{9}{Equivariance of \textsc {ColorConv}}{equation.5.21}{}}
 \newlabel{eq:color_orbit_inv}{{22}{9}{Equivariance of \textsc {ColorConv}}{equation.5.22}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Invariance of the Full Networks}{9}{subsection.5.3}\protected@file@percent }
 \newlabel{cor:invariance}{{5.3}{9}{Full networks are $\mathcal {G}$-invariant}{theorem.5.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Implicit Data Augmentation}{9}{subsection.5.4}\protected@file@percent }
-\newlabel{prop:augmentation}{{5.4}{9}{Implicit $|\mathcal {G}|$-fold augmentation}{theorem.5.4}{}}
-\citation{chervov2025cayleypy}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Implicit Data Augmentation}{10}{subsection.5.4}\protected@file@percent }
+\newlabel{prop:augmentation}{{5.4}{10}{Implicit $|\mathcal {G}|$-fold augmentation}{theorem.5.4}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Parameter Efficiency}{10}{subsection.5.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {6}Experiments}{10}{section.6}\protected@file@percent }
 \newlabel{sec:experiments}{{6}{10}{Experiments}{section.6}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Experimental Design}{10}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Evaluation Metrics}{10}{subsection.6.2}\protected@file@percent }
 \citation{chervov2025cayleypy}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Main results on the 200K training set (seed 42), mean over 3 seeds. Best result per column in \textbf  {bold}. \textit  {[pending]}: \textsc  {MLP} results will be filled in once training completes. $^\ddagger $\,Supplementary baselines not part of the primary comparison: \textsc  {MLP-Aug} ($h=110$, augmented, ${\sim }$40K params): MAE 2.36, $r$ 0.36, solve rate 1.4\% at depth 10; \textsc  {MLP-Large} ($h=256$, unconstrained, ${\sim }$169K params): MAE 1.32, $r$ 0.81, solve rate 0.0\% at depth 10.\relax }}{11}{table.caption.32}\protected@file@percent }
-\newlabel{tab:results}{{2}{11}{Main results on the 200K training set (seed 42), mean over 3 seeds. Best result per column in \textbf {bold}. \textit {[pending]}: \textsc {MLP} results will be filled in once training completes. $^\ddagger $\,Supplementary baselines not part of the primary comparison: \textsc {MLP-Aug} ($h=110$, augmented, ${\sim }$40K params): MAE 2.36, $r$ 0.36, solve rate 1.4\% at depth 10; \textsc {MLP-Large} ($h=256$, unconstrained, ${\sim }$169K params): MAE 1.32, $r$ 0.81, solve rate 0.0\% at depth 10.\relax }{table.caption.32}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Main Results}{11}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Key Findings}{11}{subsection.6.4}\protected@file@percent }
+\citation{chervov2025cayleypy}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Evaluation Metrics}{11}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Key Findings}{11}{subsection.6.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Finding 1: Exact equivariance is achieved in practice.}{11}{section*.33}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Finding 2: Symmetry vs.\ no symmetry at equal parameters.}{11}{section*.34}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Finding 2: Symmetry vs.\ no symmetry.}{11}{section*.34}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Finding 3: Color equivariance adds value over spatial-only.}{11}{section*.35}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Plots}{11}{subsection.6.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{11}{section.7}\protected@file@percent }
 \newlabel{sec:discussion}{{7}{11}{Discussion}{section.7}{}}
-\@writefile{toc}{\contentsline {paragraph}{Why does the MLP fail at search?}{11}{section*.38}\protected@file@percent }
-\newlabel{fig:learning_curves}{{2a}{12}{Validation MSE vs.\ epoch (200K training set).\relax }{figure.caption.36}{}}
-\newlabel{sub@fig:learning_curves}{{a}{12}{Validation MSE vs.\ epoch (200K training set).\relax }{figure.caption.36}{}}
-\newlabel{fig:per_depth}{{2b}{12}{MAE broken down by BFS depth.\relax }{figure.caption.36}{}}
-\newlabel{sub@fig:per_depth}{{b}{12}{MAE broken down by BFS depth.\relax }{figure.caption.36}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Training dynamics and per-depth prediction error.\relax }}{12}{figure.caption.36}\protected@file@percent }
-\newlabel{fig:solve_rates}{{3a}{12}{Greedy solve rate by scramble depth.\relax }{figure.caption.37}{}}
-\newlabel{sub@fig:solve_rates}{{a}{12}{Greedy solve rate by scramble depth.\relax }{figure.caption.37}{}}
-\newlabel{fig:equiv_error}{{3b}{12}{Equivariance error by symmetry type (log scale).\relax }{figure.caption.37}{}}
-\newlabel{sub@fig:equiv_error}{{b}{12}{Equivariance error by symmetry type (log scale).\relax }{figure.caption.37}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Solve performance and symmetry measurement.\relax }}{12}{figure.caption.37}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{The role of color symmetry.}{12}{section*.39}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Threats to validity.}{12}{section*.40}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Why does the MLP fail at search?}{11}{section*.39}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Main results (single seed, 200K training samples). Beam search: width $W=20$, max 50 moves. Equiv.\ err.: mean $|f(g{\cdot }\mathbf  {x})-f(\mathbf  {x})|$ over random group elements. $^\dagger $\textsc  {MLP-Aug} is a supplementary augmented baseline (${\sim }$40K params).\relax }}{12}{table.caption.36}\protected@file@percent }
+\newlabel{tab:results}{{2}{12}{Main results (single seed, 200K training samples). Beam search: width $W=20$, max 50 moves. Equiv.\ err.: mean $|f(g{\cdot }\bx )-f(\bx )|$ over random group elements. $^\dagger $\textsc {MLP-Aug} is a supplementary augmented baseline (${\sim }$40K params).\relax }{table.caption.36}{}}
+\@writefile{toc}{\contentsline {paragraph}{The role of color symmetry.}{12}{section*.40}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Threats to validity.}{12}{section*.41}\protected@file@percent }
 \citation{chervov2025cayleypy}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Beam-search solve rate (beam width $W=20$) at scramble depths 4, 7, 10, and 14. Both equivariant models solve every depth-7 instance; \textsc  {EMLP-Col} reaches 97.2\% at depth 10. \textsc  {MLP-Aug} degrades sharply beyond depth 7 despite data augmentation, highlighting the advantage of built-in equivariance over approximate augmentation.\relax }}{13}{figure.caption.37}\protected@file@percent }
+\newlabel{fig:solve_rate}{{2}{13}{Beam-search solve rate (beam width $W=20$) at scramble depths 4, 7, 10, and 14. Both equivariant models solve every depth-7 instance; \textsc {EMLP-Col} reaches 97.2\% at depth 10. \textsc {MLP-Aug} degrades sharply beyond depth 7 despite data augmentation, highlighting the advantage of built-in equivariance over approximate augmentation.\relax }{figure.caption.37}{}}
+\@writefile{toc}{\contentsline {paragraph}{Future work.}{13}{section*.42}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{13}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{8}{13}{Conclusion}{section.8}{}}
 \bibstyle{plainnat}
 \bibdata{references}
 \bibcite{agostinelli2019solving}{{1}{2019}{{Agostinelli et~al.}}{{Agostinelli, McAleer, Shmakov, and Baldi}}}
 \bibcite{chervov2025cayleypy}{{2}{2025}{{Chervov et~al.}}{{Chervov, Khoruzhii, Bukhal, Naghiyev, Zamkovoy, Koltsov, Cheldieva, Sychev, Lenin, Obozov, Urvanov, and Romanov}}}
-\@writefile{toc}{\contentsline {paragraph}{Future work.}{13}{section*.41}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{13}{section.8}\protected@file@percent }
-\newlabel{sec:conclusion}{{8}{13}{Conclusion}{section.8}{}}
 \bibcite{cohen2016group}{{3}{2016}{{Cohen and Welling}}{{}}}
 \bibcite{finzi2021practical}{{4}{2021}{{Finzi et~al.}}{{Finzi, Welling, and Wilson}}}
 \bibcite{kingma2015adam}{{5}{2015}{{Kingma and Ba}}{{}}}
 \bibcite{kondor2018generalization}{{6}{2018}{{Kondor and Trivedi}}{{}}}
+\newlabel{fig:pred_metrics}{{3a}{14}{Value prediction metrics on the test set.\relax }{figure.caption.38}{}}
+\newlabel{sub@fig:pred_metrics}{{a}{14}{Value prediction metrics on the test set.\relax }{figure.caption.38}{}}
+\newlabel{fig:equiv_error}{{3b}{14}{Spatial equivariance error (log scale). Equivariant models reach the float32 floor (${\sim }10^{-7}$); \textsc {MLP-Aug} has $10^6\times $ larger error.\relax }{figure.caption.38}{}}
+\newlabel{sub@fig:equiv_error}{{b}{14}{Spatial equivariance error (log scale). Equivariant models reach the float32 floor (${\sim }10^{-7}$); \textsc {MLP-Aug} has $10^6\times $ larger error.\relax }{figure.caption.38}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Prediction quality and symmetry compliance across models.\relax }}{14}{figure.caption.38}\protected@file@percent }
+\newlabel{fig:metrics}{{3}{14}{Prediction quality and symmetry compliance across models.\relax }{figure.caption.38}{}}
 \bibcite{maron2020learning}{{7}{2020}{{Maron et~al.}}{{Maron, Litany, Chechik, and Fetaya}}}
 \bibcite{mcaleer2019solving}{{8}{2019}{{McAleer et~al.}}{{McAleer, Agostinelli, Shmakov, and Baldi}}}
 \bibcite{rokicki2014diameter}{{9}{2013}{{Rokicki et~al.}}{{Rokicki, Kociemba, Davidson, and Dethridge}}}
 \bibcite{jaapsch2x2}{{10}{2025}{{Scherphuis}}{{}}}
 \bibcite{efficientcube}{{11}{2022}{{Takano}}{{}}}
-\gdef \@abspage@last{14}
+\gdef \@abspage@last{15}

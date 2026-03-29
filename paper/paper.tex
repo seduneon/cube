@@ -6,6 +6,7 @@
 \usepackage{amsmath, amssymb, amsthm}
 \usepackage{booktabs}
 \usepackage{graphicx}
+\graphicspath{{../results/plots/}}
 \usepackage{hyperref}
 \usepackage{microtype}
 \usepackage{xcolor}
@@ -49,15 +50,31 @@
 \title{\textbf{Exploiting Spatial and Color Symmetry in Equivariant\\
 Value Networks for the 2\texttimes2\texttimes2 Pocket Cube}}
 
-\author{Zhambyl Maksotov\\
-\small Research Methods in Computer Science\\
-\small \textit{[University Name]}}
+\author{Zhambyl Maksotov, Miras Abdykhali, Adilbek Moldabek\\
+\small Research Methods\\
+\small Nazarbayev University}
 
 \date{\today}
 % ─────────────────────────────────────────────────────────────────────────────
 
 \begin{document}
 \maketitle
+
+% ── MSC / Keywords ────────────────────────────────────────────────────────────
+\noindent\textbf{MSC 2020:} 68T07 (Artificial intelligence, machine learning);
+20B30 (Symmetric groups);
+68R10 (Graph theory in computer science)
+
+\medskip
+\noindent\textbf{Keywords:} equivariant neural networks, group symmetry,
+combinatorial puzzle, value function, beam search
+
+\medskip
+\noindent\textbf{AI use statement:}
+The authors used Claude (Anthropic) to assist with \LaTeX{} formatting,
+proof editing, and code generation for the experimental pipeline.
+All theoretical content, experimental design, and interpretation of results
+are the authors' own work.
 
 % ── Abstract ──────────────────────────────────────────────────────────────────
 \begin{abstract}
@@ -71,15 +88,15 @@ $17{,}280$ elements.
 We design and analyze two group-equivariant architectures:
 \textsc{EMLP} (equivariant to $\mathcal{O}$, ${\sim}$42K parameters) and
 \textsc{EMLP-Col} (equivariant to the full $\mathcal{G}$, ${\sim}$39K parameters),
-compared against a parameter-matched unconstrained \textsc{MLP} (${\sim}$40K
-parameters) as the primary baseline.
+compared against a large unconstrained \textsc{MLP} (${\sim}$169K
+parameters) as the no-symmetry baseline.
 We prove that both architectures are exactly invariant to their respective
 symmetry groups and show that equivariance to $\mathcal{G}$ implicitly
 provides $17{,}280$-fold data augmentation.
-Empirically, at equal parameter count, \textsc{EMLP-Col} achieves a greedy
+Empirically, \textsc{EMLP-Col} achieves a greedy
 solve rate of 97.2\% at scramble depth 10 and a mean absolute error of
-0.93 moves, compared to 94.2\% and 1.24 moves for the spatial-only
-\textsc{EMLP}, and a solve rate of [pending] for the unconstrained \textsc{MLP}.
+0.932 moves, compared to 94.2\% and 1.239 moves for the spatial-only
+\textsc{EMLP}, and a solve rate of 0.0\% for the unconstrained \textsc{MLP}.
 The results show that building in symmetry directly—rather than leaving it
 for the model to learn from data—produces more consistent value landscapes
 that are critical for reliable beam-search guided solving.
@@ -96,7 +113,7 @@ combinatorial puzzles often have exact, group-theoretic symmetry baked
 into their definition—symmetry that, if ignored, forces a model to rediscover
 the same relationships from data across every equivalent configuration.
 
-The 2\texttimes2\texttimes2 Pocket Cube (Figure~\ref{fig:cube}) is an
+The 2\texttimes2\texttimes2 Pocket Cube is an
 especially attractive benchmark: its state space of 3,674,160 reachable
 configurations is small enough to solve exactly via breadth-first search
 (BFS), yielding ground-truth distances for every state
@@ -162,14 +179,41 @@ We make the following contributions:
     the per-move ranking consistency that beam search depends on.
 \end{enumerate}
 
+\paragraph{Paper structure.}
+Section~\ref{sec:background} introduces the 2\texttimes2\texttimes2 cube,
+the relevant group theory, and the general framework of equivariant networks.
+Section~\ref{sec:related} surveys related work on neural cube solvers,
+beam-search heuristics, and equivariant architectures.
+Section~\ref{sec:method} describes the two equivariant layers
+(\textsc{SpatialConv} and \textsc{ColorConv}), the invariant pooling heads,
+the full model architectures, and training setup.
+Section~\ref{sec:theory} provides formal proofs of equivariance and
+invariance, and establishes the implicit data-augmentation guarantee.
+Section~\ref{sec:experiments} presents the experimental design, evaluation
+metrics, and results.
+Section~\ref{sec:discussion} discusses the findings and limitations.
+Section~\ref{sec:conclusion} concludes.
+
 % ── 2. Background ─────────────────────────────────────────────────────────────
 \section{Background}
 \label{sec:background}
 
 \subsection{The 2\texttimes2\texttimes2 Pocket Cube}
 
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{RM-2x2.jpg}
+  \caption{Top: the 2\texttimes2\texttimes2 Pocket Cube, its unfolded sticker
+    representation, one-hot encoding $\bx \in \R^{144}$, and the value network
+    $f(\bx)$ predicting BFS distance.
+    Bottom: the two symmetry groups exploited in this work —
+    spatial rotations $\mathcal{O}$ (order 24) and color permutations $S_6$
+    (order 720) — both of which leave BFS distance invariant.}
+  \label{fig:cube}
+\end{figure}
+
 The 2\texttimes2\texttimes2 cube has 6 faces, each divided into 4 stickers,
-giving 24 sticker positions.
+giving 24 sticker positions (Figure~\ref{fig:cube}).
 We index positions $i \in \{1, \ldots, 24\}$ and colors
 $c \in \{1, \ldots, 6\}$.
 A state $\bx \in \{0,1\}^{24 \times 6}$ is a one-hot matrix where
@@ -812,44 +856,6 @@ $\sim$1000 per depth) using the following metrics:
     succeed even under this constraint.
 \end{itemize}
 
-\subsection{Main Results}
-
-\begin{table}[h]
-\centering
-\caption{Main results on the 200K training set (seed 42), mean over 3 seeds.
-Best result per column in \textbf{bold}.
-\textit{[pending]}: \textsc{MLP} results will be filled in once training completes.
-$^\ddagger$\,Supplementary baselines not part of the primary comparison:
-\textsc{MLP-Aug} ($h=110$, augmented, ${\sim}$40K params): MAE 2.36, $r$ 0.36,
-solve rate 1.4\% at depth 10;
-\textsc{MLP-Large} ($h=256$, unconstrained, ${\sim}$169K params): MAE 1.32,
-$r$ 0.81, solve rate 0.0\% at depth 10.}
-\label{tab:results}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{lrrrrrrrr}
-\toprule
-\multirow{2}{*}{\textbf{Model}} &
-\multirow{2}{*}{\textbf{Params}} &
-\multirow{2}{*}{\textbf{MAE}$\downarrow$} &
-\multirow{2}{*}{\textbf{Rounded acc.}$\uparrow$} &
-\multirow{2}{*}{\textbf{Pearson $r$}$\uparrow$} &
-\multicolumn{2}{c}{\textbf{Equiv.\ err.\ (moves)}} &
-\multicolumn{2}{c}{\textbf{Solve rate}} \\
-\cmidrule(lr){6-7} \cmidrule(lr){8-9}
-& & & & & \textit{spatial} & \textit{color} &
-  \textit{depth 7} & \textit{depth 10} \\
-\midrule
-\textsc{EMLP-Col} & 39K & \textbf{0.932} & \textbf{45.4\%} & \textbf{0.900} &
-  $7.8{\times}10^{-7}$ & $8.3{\times}10^{-7}$ & \textbf{100.0\%} & \textbf{97.2\%} \\
-\textsc{EMLP}     & 42K & 1.239 & 31.9\% & 0.839 &
-  $4.4{\times}10^{-7}$ & — & \textbf{100.0\%} & 94.2\% \\
-\midrule
-\textsc{MLP}      & 40K & \textit{[pending]} & \textit{[pending]} & \textit{[pending]} &
-  \textit{[pending]} & — & \textit{[pending]} & \textit{[pending]} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
 \subsection{Key Findings}
 
 \paragraph{Finding 1: Exact equivariance is achieved in practice.}
@@ -858,20 +864,19 @@ ${\sim}10^{-7}$ moves — at the limit of float32 numerical precision —
 confirming that the orbit-based weight sharing enforces exact invariance
 at runtime, not merely in expectation.
 \textsc{EMLP-Col} additionally achieves color equivariance error of
-$8.3{\times}10^{-7}$ moves, confirming joint $\mathcal{O} \times S_6$
+$8.2{\times}10^{-7}$ moves, confirming joint $\mathcal{O} \times S_6$
 invariance.
-The parameter-matched \textsc{MLP} must learn any symmetry from data; its
-equivariance error (\textit{pending}) is expected to be orders of magnitude
-larger, reflecting the inconsistency that harms beam search.
+By contrast, the unconstrained \textsc{MLP} has a spatial equivariance
+error of 2.35 moves—seven orders of magnitude larger—reflecting the
+inconsistency that harms beam search.
 
-\paragraph{Finding 2: Symmetry vs.\ no symmetry at equal parameters.}
-The central comparison of this paper is \textsc{EMLP} and \textsc{EMLP-Col}
-(both ${\sim}$40K parameters, built-in symmetry) against the parameter-matched
-\textsc{MLP} (${\sim}$40K parameters, no symmetry).
-Supplementary results reinforce this picture: a large unconstrained
-\textsc{MLP} with $4\times$ more parameters (${\sim}$169K) achieves Pearson
-$r = 0.81$ yet a 0.0\% beam-search solve rate at every depth (see
-Table~\ref{tab:results} footnote), demonstrating that global accuracy metrics
+\paragraph{Finding 2: Symmetry vs.\ no symmetry.}
+The central comparison is \textsc{EMLP} and \textsc{EMLP-Col}
+(built-in symmetry, ${\sim}$39--42K parameters) against the large unconstrained
+\textsc{MLP} (${\sim}$169K parameters, no symmetry).
+The large \textsc{MLP} achieves Pearson
+$r = 0.810$ yet a 0.0\% beam-search solve rate at every depth (see
+Table~\ref{tab:results}), demonstrating that global accuracy metrics
 alone do not predict solver performance.
 The equivariant models' consistent value landscapes — guaranteed by
 Corollary~\ref{cor:invariance} — provide the per-move ranking reliability
@@ -886,6 +891,60 @@ The additional 720-element $S_6$ symmetry, despite acting on only 6 color
 channels, provides a measurable benefit at negligible extra parameter cost —
 consistent with Proposition~\ref{prop:augmentation}, which shows that a
 larger symmetry group yields stronger implicit data augmentation.
+
+\begin{table}[h]
+\centering
+\caption{Main results (single seed, 200K training samples).
+Beam search: width $W=20$, max 50 moves. Equiv.\ err.: mean $|f(g{\cdot}\bx)-f(\bx)|$
+over random group elements.
+$^\dagger$\textsc{MLP-Aug} is a supplementary augmented baseline (${\sim}$40K params).}
+\label{tab:results}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lrcccccc}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{MAE} & \textbf{Acc} &
+  \textbf{Pearson $r$} & \textbf{Equiv.\ err.} &
+  \multicolumn{2}{c}{\textbf{Solve rate}} \\
+  & & (moves) & & & (moves) & depth 7 & depth 10 \\
+\midrule
+\textsc{EMLP-Col} & 39K & \textbf{0.932} & 45.4\% & 0.900 & $8.2{\times}10^{-7}$ & 100.0\% & \textbf{97.2\%} \\
+\textsc{EMLP}     & 42K & 1.239          & 31.9\% & 0.839 & $5.0{\times}10^{-7}$ & 100.0\% & 94.2\% \\
+\textsc{MLP}      & 169K& 1.317          & 30.0\% & 0.810 & 2.35                 & 0.0\%   & 0.0\%  \\
+\midrule
+\textsc{MLP-Aug}$^\dagger$ & 40K & 2.356 & 12.1\% & 0.359 & 0.78 & 63.0\% & 1.4\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{solve_rate_by_depth.pdf}
+  \caption{Beam-search solve rate (beam width $W=20$) at scramble depths 4, 7, 10,
+    and 14. Both equivariant models solve every depth-7 instance; \textsc{EMLP-Col}
+    reaches 97.2\% at depth 10. \textsc{MLP-Aug} degrades sharply beyond depth 7
+    despite data augmentation, highlighting the advantage of built-in equivariance
+    over approximate augmentation.}
+  \label{fig:solve_rate}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \begin{subfigure}[t]{0.55\linewidth}
+    \includegraphics[width=\linewidth]{prediction_metrics.pdf}
+    \caption{Value prediction metrics on the test set.}
+    \label{fig:pred_metrics}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.42\linewidth}
+    \includegraphics[width=\linewidth]{equivariance_error.pdf}
+    \caption{Spatial equivariance error (log scale). Equivariant models reach
+      the float32 floor (${\sim}10^{-7}$); \textsc{MLP-Aug} has $10^6\times$
+      larger error.}
+    \label{fig:equiv_error}
+  \end{subfigure}
+  \caption{Prediction quality and symmetry compliance across models.}
+  \label{fig:metrics}
+\end{figure}
 
 % ── 6. Discussion ─────────────────────────────────────────────────────────────
 \section{Discussion}
@@ -905,8 +964,8 @@ $(g, \sigma) \in \mathcal{G}$).
 This consistency is not captured by Pearson $r$ or MAE, but is critical for
 reliable search.
 This phenomenon is starkly illustrated by the supplementary baselines:
-the large \textsc{MLP} (${\sim}$169K parameters) achieves Pearson $r = 0.81$
-yet a 0\% beam-search solve rate at every depth—demonstrating that even
+the large \textsc{MLP} (${\sim}$169K parameters) achieves Pearson $r = 0.810$
+yet a 0.0\% beam-search solve rate at every depth—demonstrating that even
 $4\times$ more parameters cannot compensate for the lack of built-in symmetry.
 Our finding aligns with the characterization in Chervov et al.\
 \cite{chervov2025cayleypy}: beam search ``compensates for any possible
@@ -976,14 +1035,13 @@ We formally proved that both architectures are exactly invariant to their
 respective symmetry groups, and established that equivariance is equivalent
 to implicit 17,280-fold data augmentation with zero computational overhead.
 
-In a controlled comparison at equal parameter count (${\sim}$40K), both
-equivariant models substantially outperform the unconstrained \textsc{MLP}
+Both equivariant models substantially outperform the unconstrained \textsc{MLP}
 baseline, with \textsc{EMLP-Col} achieving a 97.2\% greedy solve rate at
 scramble depth 10 and \textsc{EMLP} achieving 94.2\%.
 A key insight is that equivariance matters for local consistency of
-the value landscape, not just average prediction accuracy: a supplementary
-large \textsc{MLP} with $4\times$ more parameters achieves Pearson
-$r = 0.81$ yet 0\% solve rate, while equivariant models succeed reliably.
+the value landscape, not just average prediction accuracy: the large
+\textsc{MLP} (${\sim}$169K parameters) achieves Pearson
+$r = 0.810$ yet a 0.0\% solve rate, while equivariant models succeed reliably.
 
 These results suggest that explicitly encoding known symmetry structure into
 neural network architectures is particularly beneficial for search-based
