@@ -183,14 +183,40 @@ def get_param_count(model: nn.Module) -> int:
 
 
 def save_model(model: nn.Module, path: str) -> None:
+    """Save only model weights (legacy format)."""
     path = str(path).replace('.npz', '.pt')
     torch.save(model.state_dict(), path)
 
 
-def load_model(model_type: str, path: str) -> nn.Module:
-    """Load a model checkpoint, inferring architecture from saved weight shapes."""
+def save_checkpoint(model: nn.Module, path: str, **metadata) -> None:
+    """Save model weights with metadata.
+
+    Stored keys: model_state_dict, n_params, plus any extra keyword arguments
+    (e.g. config dict, best_val_mse, best_epoch).
+    """
     path = str(path).replace('.npz', '.pt')
-    state = torch.load(path, map_location='cpu', weights_only=True)
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'n_params': get_param_count(model),
+        **metadata,
+    }, path)
+
+
+def load_model(model_type: str, path: str) -> nn.Module:
+    """Load a model checkpoint, inferring architecture from saved weight shapes.
+
+    Handles both checkpoint formats:
+    - New format: dict with 'model_state_dict' key (saved by save_checkpoint)
+    - Old format: bare state_dict (saved by save_model)
+    """
+    path = str(path).replace('.npz', '.pt')
+    data = torch.load(path, map_location='cpu', weights_only=True)
+
+    # Unwrap new-format checkpoint
+    if isinstance(data, dict) and 'model_state_dict' in data:
+        state = data['model_state_dict']
+    else:
+        state = data
 
     if model_type == 'emlp':
         # conv_layers.0.weight: (c_hidden, 6, n_orbits)
@@ -198,7 +224,7 @@ def load_model(model_type: str, path: str) -> nn.Module:
         model = EquivariantValueNet(c_hidden=c_hidden)
 
     elif model_type == 'emlp_col':
-        # conv_layers.0.weight: (k_out, k_in, n_sp, n_co) — first layer has k_in=1
+        # conv_layers.0.weight: (k_out, k_in=1, n_sp, n_co)
         k_hidden = state['conv_layers.0.weight'].shape[0]
         model = EquivariantColorValueNet(k_hidden=k_hidden)
 

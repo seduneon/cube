@@ -20,18 +20,17 @@ from cube_env import (
 )
 from cube_symmetry import ALL_ROTATIONS, ALL_COLOR_PERMS, apply_color_perm_batch, apply_rotation
 from models import MODEL_REGISTRY, load_model, get_param_count, DEVICE
-from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist, _CANDIDATES
+from dataset import load_dataset, DATA_DIR, load_bfs_tables, bfs_tables_exist, _CANDIDATES, MAX_DISTANCE
 from train import CKPT_DIR, LOG_DIR, TRAIN_SIZES, SEEDS, size_label
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 PLOT_DIR = os.path.join(RESULTS_DIR, "plots")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-MAX_DISTANCE = 14
+MAX_BFS_DISTANCE = MAX_DISTANCE  # 14
 
 # ─── Plot styling ─────────────────────────────────────────────────────────────
 
-# One color per model key — extend if new models are added to the registry
 MODEL_COLORS = {
     "emlp":     "#2196F3",   # blue
     "emlp_col": "#4CAF50",   # green
@@ -63,11 +62,17 @@ def load_checkpoint(model_type, train_size, seed, verbose=True):
 
 
 def make_predict_fn(model):
-    """Return a predict function: numpy (N, 144) -> numpy (N,) predictions."""
+    """Return a predict function: numpy (N, 144) -> numpy (N,) predictions in move units.
+
+    Models are trained on targets normalized to [0, 1].  This function scales
+    predictions back to the original distance scale (0 – MAX_DISTANCE moves)
+    so that all downstream evaluation code works in interpretable units.
+    """
     def _predict(X_np):
         with torch.no_grad():
             x = torch.tensor(X_np, dtype=torch.float32, device=DEVICE)
-            return model(x).squeeze().cpu().numpy()
+            pred = model(x).squeeze().cpu().numpy()
+            return pred * MAX_BFS_DISTANCE   # scale [0,1] → [0, MAX_DISTANCE]
     return _predict
 
 
@@ -86,15 +91,16 @@ def equivariance_error(predict_fn, X_test, symmetries=("spatial",),
 
     Parameters
     ----------
-    predict_fn  : callable (N, 144) -> (N,)
+    predict_fn  : callable (N, 144) -> (N,)  [in move units]
     X_test      : (N, 144) float32 one-hot states
-    symmetries  : tuple of symmetry names to test: "spatial" and/or "color"
-    n_samples   : number of random group elements to sample per state
-    n_states    : number of test states to use
+    symmetries  : tuple of: "spatial", "color", "combined"
+    n_samples   : number of random group elements per state
+    n_states    : number of test states to sample
 
     Returns
     -------
-    dict[str, float]  — mean absolute equivariance error per symmetry type
+    dict[str, float]  — mean absolute equivariance error per symmetry type.
+    Error is in the same units as predict_fn output (moves).
     """
     actual_states = min(n_states, len(X_test))
     idx = np.random.choice(len(X_test), size=actual_states, replace=False)
@@ -125,21 +131,40 @@ def equivariance_error(predict_fn, X_test, symmetries=("spatial",),
             errors.append(np.abs(predict_fn(X_perm) - f_original))
         results["color"] = float(np.mean(errors))
 
+    if "combined" in symmetries:
+        # Apply a random spatial rotation AND a random color permutation together
+        states_24 = X_sample.reshape(actual_states, 24, 6).argmax(axis=2)
+        rng = np.random.RandomState(7)
+        errors = []
+        for _ in range(n_samples):
+            rot_perm = ALL_ROTATIONS[rng.randint(len(ALL_ROTATIONS))]
+            color_perm = ALL_COLOR_PERMS[rng.randint(len(ALL_COLOR_PERMS))]
+            rotated = np.array([apply_rotation(rot_perm, s) for s in states_24], dtype=np.int8)
+            X_both = np.array([encode_state(s) for s in rotated], dtype=np.float32)
+            X_both = apply_color_perm_batch(X_both, color_perm)
+            errors.append(np.abs(predict_fn(X_both) - f_original))
+        results["combined"] = float(np.mean(errors))
+
     return results
 
 
 # ─── Metric 2: Value Prediction Accuracy ─────────────────────────────────────
 
 def value_prediction_metrics(predict_fn, X_test, y_test):
-    preds = model_predict(predict_fn, X_test)
-    y_true = y_test.astype(np.float32)
+    """Compute prediction accuracy metrics.
+
+    predict_fn returns predictions already scaled to move units.
+    y_test contains raw BFS distances (integers 0–MAX_DISTANCE).
+    """
+    preds = model_predict(predict_fn, X_test)   # in move units
+    y_true = y_test.astype(np.float32)           # raw distances
 
     mae = float(np.mean(np.abs(preds - y_true)))
     rounded_acc = float(np.mean(np.round(preds) == y_true))
     corr = float(np.corrcoef(preds, y_true)[0, 1])
 
     per_depth_mae = {}
-    for d in range(MAX_DISTANCE + 1):
+    for d in range(MAX_BFS_DISTANCE + 1):
         mask = y_test == d
         if mask.sum() > 0:
             per_depth_mae[d] = float(np.mean(np.abs(preds[mask] - y_true[mask])))
@@ -249,8 +274,6 @@ def evaluate_solve_rate(predict_fn, n_trials=500, scramble_depths=None,
     for depth in scramble_depths:
         pool = states_by_depth.get(depth, [])
         if not pool:
-            if verbose:
-                print(f"  depth={depth:2d}: no states at this exact distance")
             continue
         n = min(n_trials, len(pool))
         indices = rng.choice(len(pool), size=n, replace=False)
@@ -290,7 +313,7 @@ def plot_learning_curves(model_types, train_size=200_000):
 
     for ax_idx, metric in enumerate(["train_mse", "val_mse"]):
         ax = axes[ax_idx]
-        ax.set_title(metric.replace("_", " ").title())
+        ax.set_title(metric.replace("_", " ").title() + " (normalized)")
         ax.set_xlabel("Epoch")
         ax.set_ylabel("MSE")
 
@@ -322,10 +345,11 @@ def plot_learning_curves(model_types, train_size=200_000):
 
 
 def plot_data_efficiency(all_val_mses, model_types):
+    """Val MSE vs training set size.  all_val_mses is in raw move² units."""
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.set_title("Data Efficiency: Val MSE vs Training Set Size")
     ax.set_xlabel("Training set size")
-    ax.set_ylabel("Val MSE")
+    ax.set_ylabel("Val MSE (moves²)")
     ax.set_xscale("log")
     ax.set_yscale("log")
 
@@ -353,8 +377,7 @@ def plot_data_efficiency(all_val_mses, model_types):
 
 
 def plot_per_depth_accuracy(metrics_by_model):
-    """metrics_by_model: dict[model_key -> value_prediction_metrics result]"""
-    depths = list(range(MAX_DISTANCE + 1))
+    depths = list(range(MAX_BFS_DISTANCE + 1))
     keys = list(metrics_by_model.keys())
     n_models = len(keys)
     width = 0.8 / n_models
@@ -367,9 +390,9 @@ def plot_per_depth_accuracy(metrics_by_model):
         ax.bar(x + offset, mae_vals, width, label=_model_label(key),
                color=_model_color(key), alpha=0.8)
 
-    ax.set_title("Per-Depth MAE")
+    ax.set_title("Per-Depth MAE (moves)")
     ax.set_xlabel("Optimal Distance (BFS depth)")
-    ax.set_ylabel("Mean Absolute Error")
+    ax.set_ylabel("Mean Absolute Error (moves)")
     ax.set_xticks(x)
     ax.set_xticklabels([str(d) for d in depths])
     ax.legend()
@@ -382,11 +405,8 @@ def plot_per_depth_accuracy(metrics_by_model):
 
 
 def plot_equivariance_error(eq_errors_by_model):
-    """eq_errors_by_model: dict[model_key -> dict[symmetry -> float]]
-
-    e.g. {"emlp": {"spatial": 1e-7}, "emlp_col": {"spatial": 1e-7, "color": 1e-7}, "mlp": {}}
-    """
-    symmetry_types = ["spatial", "color"]
+    """eq_errors_by_model: dict[model_key -> dict[symmetry_type -> float]]"""
+    symmetry_types = ["spatial", "color", "combined"]
     has_sym = {sym: any(sym in v for v in eq_errors_by_model.values())
                for sym in symmetry_types}
     active_syms = [s for s in symmetry_types if has_sym[s]]
@@ -407,8 +427,8 @@ def plot_equivariance_error(eq_errors_by_model):
 
         bars = ax.bar(labels, errors, color=colors, alpha=0.8, width=0.5)
         ax.set_yscale("log")
-        ax.set_ylabel("Mean |f(g·x) − f(x)|")
-        ax.set_title(f"{sym.capitalize()} equivariance error\n(lower is better)")
+        ax.set_ylabel("Mean |f(g·x) − f(x)| (moves)")
+        ax.set_title(f"{sym.capitalize()} equivariance error")
         ax.grid(True, alpha=0.3, axis="y")
         for bar, err in zip(bars, errors):
             ax.text(bar.get_x() + bar.get_width() / 2, err * 1.5,
@@ -416,6 +436,75 @@ def plot_equivariance_error(eq_errors_by_model):
 
     plt.tight_layout()
     path = os.path.join(PLOT_DIR, "equivariance_error.png")
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {path}")
+
+
+def plot_solve_rates(solve_results, model_types):
+    """Grouped bar chart: solve rate by scramble depth for each model."""
+    if not solve_results:
+        return
+
+    depths = sorted(solve_results.keys())
+    n_models = len(model_types)
+    x = np.arange(len(depths))
+    width = 0.8 / n_models
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for i, key in enumerate(model_types):
+        rates = [solve_results[d].get(key, {}).get("solve_rate", 0) * 100
+                 for d in depths]
+        offset = (i - (n_models - 1) / 2) * width
+        ax.bar(x + offset, rates, width, label=_model_label(key),
+               color=_model_color(key), alpha=0.8)
+
+    ax.set_title("Greedy Solve Rate by Scramble Depth")
+    ax.set_xlabel("BFS Distance (scramble depth)")
+    ax.set_ylabel("Solve Rate (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(d) for d in depths])
+    ax.set_ylim(0, 110)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    path = os.path.join(PLOT_DIR, "solve_rates.png")
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {path}")
+
+
+def plot_param_comparison(model_types, train_size, seed=SEEDS[0]):
+    """Bar chart comparing total parameter counts."""
+    param_counts = {}
+    for key in model_types:
+        try:
+            m = load_checkpoint(key, train_size, seed, verbose=False)
+            param_counts[key] = get_param_count(m)
+        except FileNotFoundError:
+            pass
+
+    if not param_counts:
+        return
+
+    keys = list(param_counts.keys())
+    counts = [param_counts[k] for k in keys]
+    labels = [_model_label(k) for k in keys]
+    colors = [_model_color(k) for k in keys]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(labels, counts, color=colors, alpha=0.8, width=0.5)
+    ax.set_yscale("log")
+    ax.set_ylabel("Number of parameters")
+    ax.set_title("Parameter Count Comparison")
+    ax.grid(True, alpha=0.3, axis="y")
+    for bar, count in zip(bars, counts):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() * 1.1,
+                f"{count:,}", ha="center", va="bottom", fontsize=9)
+    plt.xticks(rotation=15, ha="right")
+    plt.tight_layout()
+    path = os.path.join(PLOT_DIR, "param_comparison.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved {path}")
@@ -449,18 +538,92 @@ def save_solve_rate_table(solve_results, model_types, path=None):
     print(f"\nSaved {path}")
 
 
+# ─── Summary table ────────────────────────────────────────────────────────────
+
+def print_summary_table(model_types, all_val_mses, val_metrics,
+                        eq_errors, solve_results, train_size):
+    """Print a formatted summary table across all evaluated models.
+
+    all_val_mses : dict[(key, train_size, seed) -> float]  (in move² units)
+    val_metrics  : dict[key -> {mae, rounded_accuracy, correlation, ...}]
+    eq_errors    : dict[key -> {spatial/color/combined -> float}]
+    solve_results: dict[depth -> {key -> {solve_rate, ...}}]
+    """
+    print(f"\n{'='*80}")
+    print(f"  RESULTS SUMMARY  ({size_label(train_size)} training set, mean ± std over {len(SEEDS)} seeds)")
+    print(f"{'='*80}")
+
+    col_w = max(20, *(len(_model_label(k)) + 2 for k in model_types))
+    header = f"{'Metric':<28}" + "".join(f"  {_model_label(k):<{col_w}}" for k in model_types)
+    print(header)
+    print("-" * len(header))
+
+    def row(name, fmt_fn):
+        line = f"  {name:<26}"
+        for k in model_types:
+            try:
+                line += "  " + fmt_fn(k).ljust(col_w)
+            except Exception:
+                line += "  " + "N/A".ljust(col_w)
+        print(line)
+
+    # Parameter count
+    def param_str(k):
+        try:
+            m = load_checkpoint(k, train_size, SEEDS[0], verbose=False)
+            return f"{get_param_count(m):,}"
+        except Exception:
+            return "N/A"
+    row("Parameters", param_str)
+
+    # Val MSE (mean ± std across seeds, in move² units)
+    def val_mse_str(k):
+        vals = [all_val_mses.get((k, train_size, s)) for s in SEEDS]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            return "N/A"
+        return f"{np.mean(vals):.4f}±{np.std(vals):.4f}"
+    row("Val MSE (moves²)", val_mse_str)
+
+    # Test MAE
+    def mae_str(k):
+        m = val_metrics.get(k)
+        return f"{m['mae']:.3f}" if m else "N/A"
+    row("Test MAE (moves)", mae_str)
+
+    # Rounded accuracy
+    def racc_str(k):
+        m = val_metrics.get(k)
+        return f"{m['rounded_accuracy']:.1%}" if m else "N/A"
+    row("Rounded accuracy", racc_str)
+
+    # Pearson r
+    def corr_str(k):
+        m = val_metrics.get(k)
+        return f"{m['correlation']:.4f}" if m else "N/A"
+    row("Pearson r", corr_str)
+
+    # Equivariance errors
+    for sym in ("spatial", "color", "combined"):
+        def eq_str(k, _sym=sym):
+            eq = eq_errors.get(k, {})
+            return f"{eq[_sym]:.2e}" if _sym in eq else "—"
+        row(f"Equiv err ({sym})", eq_str)
+
+    # Solve rates
+    for depth in sorted(solve_results.keys()):
+        def sr_str(k, _d=depth):
+            r = solve_results[_d].get(k)
+            return f"{r['solve_rate']:.1%}" if r else "N/A"
+        row(f"Solve rate (d={depth})", sr_str)
+
+    print(f"{'='*80}\n")
+
+
 # ─── Full evaluation run ──────────────────────────────────────────────────────
 
 def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
                         model_types=None):
-    """Run evaluation for the given model types.
-
-    Parameters
-    ----------
-    train_size_for_detail : int   — which training size to use for detailed metrics
-    train_sizes           : list  — training sizes to include in data-efficiency plot
-    model_types           : list  — model keys to evaluate (default: ["emlp", "mlp"])
-    """
     if train_sizes is None:
         train_sizes = TRAIN_SIZES
     if train_size_for_detail not in train_sizes:
@@ -470,62 +633,64 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
 
     X_test, y_test = load_dataset("test")
     X_val, y_val = load_dataset("val")
-    print(f"Test set: {X_test.shape}")
+    print(f"Test set: {X_test.shape}, y range: {y_test.min()}–{y_test.max()}")
 
+    # all_val_mses: in move² units (predictions scaled by MAX_DISTANCE)
     all_val_mses = {}
-    eq_errors = {}           # {model_key: {symmetry: float}}
+    eq_errors = {}
     val_metrics = {}
     solve_results = defaultdict(dict)
 
     for key in model_types:
         spec = MODEL_REGISTRY.get(key)
+
+        # Data efficiency: val MSE across all train sizes and seeds
         for train_size in train_sizes:
             for seed in SEEDS:
                 try:
-                    m = load_checkpoint(key, train_size, seed)
+                    m = load_checkpoint(key, train_size, seed, verbose=False)
                     predict_fn_m = make_predict_fn(m)
-                    preds_val = model_predict(predict_fn_m, X_val)
+                    preds_val = model_predict(predict_fn_m, X_val)   # in move units
                     val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
                     all_val_mses[(key, train_size, seed)] = val_mse
                 except Exception as e:
                     print(f"  Skip (no checkpoint): {e}")
 
-        if train_size_for_detail in train_sizes:
-            try:
-                model = load_checkpoint(key, train_size_for_detail, 0)
-                predict_fn = make_predict_fn(model)
+        # Detailed metrics at the chosen train_size
+        try:
+            model = load_checkpoint(key, train_size_for_detail, SEEDS[0])
+            predict_fn = make_predict_fn(model)
 
-                print(f"\n── {_model_label(key)} ({size_label(train_size_for_detail)}) ──")
+            print(f"\n── {_model_label(key)} ({size_label(train_size_for_detail)}) ──")
 
-                if spec and spec.symmetries:
-                    print("  Equivariance error...")
-                    eq_result = equivariance_error(predict_fn, X_test,
-                                                   symmetries=spec.symmetries)
-                    eq_errors[key] = eq_result
-                    for sym, err in eq_result.items():
-                        print(f"    {sym}: {err:.2e}")
-                else:
-                    # MLP-like: still measure spatial error to show it's non-zero
-                    eq_result = equivariance_error(predict_fn, X_test,
-                                                   symmetries=("spatial",))
-                    eq_errors[key] = eq_result
-                    print(f"  Spatial equivariance error: {eq_result['spatial']:.2e}")
+            # Which symmetries to test
+            test_syms = set(spec.symmetries if spec else ())
+            test_syms.add("spatial")  # always test spatial
+            if "spatial" in test_syms and "color" in test_syms:
+                test_syms.add("combined")
 
-                print("  Value prediction metrics...")
-                metrics = value_prediction_metrics(predict_fn, X_test, y_test)
-                val_metrics[key] = metrics
-                print(f"  MAE: {metrics['mae']:.4f}")
-                print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
-                print(f"  Pearson r: {metrics['correlation']:.4f}")
+            print("  Equivariance error...")
+            eq_result = equivariance_error(predict_fn, X_test,
+                                           symmetries=tuple(test_syms))
+            eq_errors[key] = eq_result
+            for sym, err in sorted(eq_result.items()):
+                print(f"    {sym}: {err:.2e} moves")
 
-                print("  Greedy solve rate...")
-                solve_res = evaluate_solve_rate(predict_fn, n_trials=500,
-                                                beam_width=20, verbose=True)
-                for depth, res in solve_res.items():
-                    solve_results[depth][key] = res
+            print("  Value prediction metrics...")
+            metrics = value_prediction_metrics(predict_fn, X_test, y_test)
+            val_metrics[key] = metrics
+            print(f"  MAE: {metrics['mae']:.3f} moves")
+            print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
+            print(f"  Pearson r: {metrics['correlation']:.4f}")
 
-            except FileNotFoundError as e:
-                print(f"  Skip: {e}")
+            print("  Greedy solve rate...")
+            solve_res = evaluate_solve_rate(predict_fn, n_trials=500,
+                                            beam_width=20, verbose=True)
+            for depth, res in solve_res.items():
+                solve_results[depth][key] = res
+
+        except FileNotFoundError as e:
+            print(f"  Skip: {e}")
 
     print("\nGenerating plots...")
     plot_learning_curves(model_types, train_size=train_size_for_detail)
@@ -536,25 +701,14 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
     if eq_errors:
         plot_equivariance_error(eq_errors)
     if solve_results:
+        plot_solve_rates(solve_results, model_types)
         save_solve_rate_table(solve_results, model_types)
+    plot_param_comparison(model_types, train_size_for_detail)
 
-    if val_metrics:
-        print("\nSummary:")
-        print(f"  {'Model':<25}  {'Params':>10}  {'MAE':>8}  {'Rounded Acc':>12}  {'Pearson r':>10}")
-        print(f"  {'-'*70}")
-        for key in model_types:
-            if key not in val_metrics:
-                continue
-            try:
-                model = load_checkpoint(key, train_size_for_detail, 0, verbose=False)
-                n_params = get_param_count(model)
-            except Exception:
-                n_params = 0
-            m = val_metrics[key]
-            print(f"  {_model_label(key):<25}  {n_params:>10,}  {m['mae']:>8.4f}"
-                  f"  {m['rounded_accuracy']:>11.1%}  {m['correlation']:>10.4f}")
+    print_summary_table(model_types, all_val_mses, val_metrics,
+                        eq_errors, solve_results, train_size_for_detail)
 
-    print("\nEvaluation complete. Plots saved to:", PLOT_DIR)
+    print("Evaluation complete. Plots saved to:", PLOT_DIR)
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
