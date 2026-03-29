@@ -28,6 +28,7 @@ PLOT_DIR = os.path.join(RESULTS_DIR, "plots")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 MAX_BFS_DISTANCE = MAX_DISTANCE  # 14
+BEAM_WIDTH = 20
 
 # ─── Plot styling ─────────────────────────────────────────────────────────────
 
@@ -610,6 +611,13 @@ def print_summary_table(model_types, all_val_mses, val_metrics,
             return f"{eq[_sym]:.2e}" if _sym in eq else "—"
         row(f"Equiv err ({sym})", eq_str)
 
+    # Inference time
+    def infer_str(k):
+        m = val_metrics.get(k)
+        ms = m.get('ms_per_sample') if m else None
+        return f"{ms:.4f} ms" if ms is not None else "N/A"
+    row("Inference (ms/sample)", infer_str)
+
     # Solve rates
     for depth in sorted(solve_results.keys()):
         def sr_str(k, _d=depth):
@@ -623,7 +631,7 @@ def print_summary_table(model_types, all_val_mses, val_metrics,
 # ─── Full evaluation run ──────────────────────────────────────────────────────
 
 def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
-                        model_types=None):
+                        model_types=None, beam_width=BEAM_WIDTH):
     if train_sizes is None:
         train_sizes = TRAIN_SIZES
     if train_size_for_detail not in train_sizes:
@@ -683,9 +691,18 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
             print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
             print(f"  Pearson r: {metrics['correlation']:.4f}")
 
-            print("  Greedy solve rate...")
+            import time as _time
+            _warmup = model_predict(predict_fn, X_test[:32])
+            _t0 = _time.perf_counter()
+            _preds = model_predict(predict_fn, X_test)
+            _elapsed = _time.perf_counter() - _t0
+            _ms = _elapsed / len(X_test) * 1000
+            metrics['ms_per_sample'] = _ms
+            print(f"  Inference: {_ms:.4f} ms/sample ({len(X_test)} samples)")
+
+            print(f"  Greedy solve rate (beam_width={beam_width})...")
             solve_res = evaluate_solve_rate(predict_fn, n_trials=500,
-                                            beam_width=20, verbose=True)
+                                            beam_width=beam_width, verbose=True)
             for depth, res in solve_res.items():
                 solve_results[depth][key] = res
 
@@ -724,6 +741,9 @@ if __name__ == "__main__":
                         choices=ALL_MODEL_TYPES,
                         default=["emlp", "mlp"],
                         help="Model types to evaluate")
+    parser.add_argument("--beam-width", type=int, default=BEAM_WIDTH,
+                        help=f"Beam width for solve-rate evaluation (default: {BEAM_WIDTH})")
     args = parser.parse_args()
     run_full_evaluation(train_size_for_detail=args.train_size,
-                        model_types=args.models)
+                        model_types=args.models,
+                        beam_width=args.beam_width)

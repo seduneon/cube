@@ -167,6 +167,13 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         color_augment=True,
         symmetries=(),
     ),
+    "mlp_matched": ModelSpec(
+        key="mlp_matched",
+        label="MLP (matched)",
+        model_class=MLPValueNet,
+        model_kwargs_fn=lambda w, nl: {"hidden_dim": w, "num_layers": nl},
+        symmetries=(),
+    ),
 }
 
 

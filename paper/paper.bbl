@@ -1,0 +1,71 @@
+\begin{thebibliography}{9}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Agostinelli et~al.(2019)Agostinelli, McAleer, Shmakov, and
+  Baldi]{agostinelli2019solving}
+Forest Agostinelli, Stephen McAleer, Alexander Shmakov, and Pierre Baldi.
+\newblock Solving the rubik's cube without human knowledge.
+\newblock In \emph{Proceedings of the 36th International Conference on Machine
+  Learning (ICML)}, pages 314--323, 2019.
+
+\bibitem[Chervov et~al.(2025)Chervov, Khoruzhii, Bukhal, Naghiyev, Zamkovoy,
+  Koltsov, Cheldieva, Sychev, Lenin, Obozov, Urvanov, and
+  Romanov]{chervov2025cayleypy}
+A.~Chervov, K.~Khoruzhii, N.~Bukhal, J.~Naghiyev, V.~Zamkovoy, I.~Koltsov,
+  L.~Cheldieva, A.~Sychev, A.~Lenin, M.~Obozov, E.~Urvanov, and A.~Romanov.
+\newblock A machine learning approach that beats large rubik's cubes: The
+  {CayleyPy} project.
+\newblock \emph{arXiv preprint arXiv:2502.13266}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2502.13266}.
+
+\bibitem[Cohen and Welling(2016)]{cohen2016group}
+Taco Cohen and Max Welling.
+\newblock Group equivariant convolutional networks.
+\newblock In \emph{Proceedings of the 33rd International Conference on Machine
+  Learning (ICML)}, pages 2990--2999, 2016.
+
+\bibitem[Finzi et~al.(2021)Finzi, Welling, and Wilson]{finzi2021practical}
+Marc Finzi, Max Welling, and Andrew~Gordon Wilson.
+\newblock A practical method for constructing equivariant multilayer
+  perceptrons for arbitrary matrix groups.
+\newblock In \emph{Proceedings of the 38th International Conference on Machine
+  Learning (ICML)}, pages 3318--3328, 2021.
+
+\bibitem[Kingma and Ba(2015)]{kingma2015adam}
+Diederik~P Kingma and Jimmy Ba.
+\newblock Adam: A method for stochastic optimization.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2015.
+
+\bibitem[Kondor and Trivedi(2018)]{kondor2018generalization}
+Risi Kondor and Shubhendu Trivedi.
+\newblock On the generalization of equivariance and convolution in neural
+  networks to the action of compact groups.
+\newblock In \emph{Proceedings of the 35th International Conference on Machine
+  Learning (ICML)}, pages 2747--2755, 2018.
+
+\bibitem[Maron et~al.(2020)Maron, Litany, Chechik, and
+  Fetaya]{maron2020learning}
+Haggai Maron, Or~Litany, Gal Chechik, and Ethan Fetaya.
+\newblock On learning sets of symmetric elements.
+\newblock In \emph{Proceedings of the 37th International Conference on Machine
+  Learning (ICML)}, pages 6734--6744, 2020.
+
+\bibitem[McAleer et~al.(2019)McAleer, Agostinelli, Shmakov, and
+  Baldi]{mcaleer2019solving}
+Stephen McAleer, Forest Agostinelli, Alexander Shmakov, and Pierre Baldi.
+\newblock Solving the rubik's cube with approximate policy iteration.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2019.
+
+\bibitem[Takano(2022)]{efficientcube}
+Kunga Takano.
+\newblock {EfficientCube}: Solving {Rubik's} cube efficiently using deep
+  reinforcement learning.
+\newblock \emph{arXiv preprint}, 2022.
+
+\end{thebibliography}

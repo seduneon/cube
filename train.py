@@ -37,10 +37,11 @@ NUM_LAYERS = 3
 # Per-model width.  emlp/mlp widths give comparable hidden features;
 # emlp_col k=10 → 60 channels/position = 1440 total features.
 MODEL_WIDTHS = {
-    "emlp":     84,    # c_hidden = 84  (spatial only, ~351K params)
-    "emlp_col": 10,    # k_hidden = 10  → 60 channels, ~8K params
-    "mlp":      512,   # hidden_dim = 512
-    "mlp_aug":  512,   # same as mlp
+    "emlp":         28,  # c_hidden = 28  (spatial only, ~42K params)
+    "emlp_col":     20,  # k_hidden = 20  → ~39K params; 9× fewer FLOPs than k=60
+    "mlp":         256,  # hidden_dim = 256, ~169K params  (large unconstrained baseline)
+    "mlp_aug":     110,  # hidden_dim = 110, ~40K params   (matched to equivariant)
+    "mlp_matched": 110,  # hidden_dim = 110, ~40K params   (parameter-matched to emlp)
 }
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]
