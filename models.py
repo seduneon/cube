@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -35,6 +36,9 @@ from equivariant_layers import (
     BothConvLayer,
     ColorConvLayer,
     InvariantHead,
+    RotResBlock,
+    BothResBlock,
+    ColorResBlock,
 )
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,22 +51,24 @@ class RotValueNet(nn.Module):
 
     Architecture:
         (batch, 144) → reshape (batch, 24, 6)
-        GroupConvLayer(6, c_hidden) + ReLU
-        [GroupConvLayer(c_hidden, c_hidden) + ReLU] × (num_layers - 1)
+        GroupConvLayer(6, c_hidden) + ReLU          [input projection]
+        RotResBlock(c_hidden) × (num_layers - 1)    [pre-norm residual blocks]
         InvariantLinear(c_hidden) → (batch, 1)
     """
 
     def __init__(self, c_hidden: int = 84, num_layers: int = 3):
         super().__init__()
-        layers = [GroupConvLayer(6, c_hidden), nn.ReLU()]
-        for _ in range(num_layers - 1):
-            layers += [GroupConvLayer(c_hidden, c_hidden), nn.ReLU()]
-        self.conv_layers = nn.Sequential(*layers)
+        self.input_layer = GroupConvLayer(6, c_hidden)
+        self.blocks = nn.ModuleList(
+            [RotResBlock(c_hidden) for _ in range(num_layers - 1)]
+        )
         self.output = InvariantLinear(c_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.view(x.shape[0], 24, 6)
-        x = self.conv_layers(x)
+        x = F.relu(self.input_layer(x))
+        for block in self.blocks:
+            x = block(x)
         return self.output(x)
 
 
@@ -74,24 +80,24 @@ class BothValueNet(nn.Module):
 
     Architecture:
         (batch, 144) → reshape (batch, 24, 6)          [= (batch, 24, 6*1)]
-        BothConvLayer(1, k_hidden) + ReLU
-        [BothConvLayer(k_hidden, k_hidden) + ReLU] × (num_layers - 1)
+        BothConvLayer(1, k_hidden) + ReLU               [input projection]
+        BothResBlock(k_hidden) × (num_layers - 1)       [pre-norm residual blocks]
         InvariantHead(k_hidden) → (batch, 1)
-
-    k_hidden=14 gives 84 effective channels, matching RotValueNet(c_hidden=84).
     """
 
     def __init__(self, k_hidden: int = 14, num_layers: int = 3):
         super().__init__()
-        layers = [BothConvLayer(1, k_hidden), nn.ReLU()]
-        for _ in range(num_layers - 1):
-            layers += [BothConvLayer(k_hidden, k_hidden), nn.ReLU()]
-        self.conv_layers = nn.Sequential(*layers)
+        self.input_layer = BothConvLayer(1, k_hidden)
+        self.blocks = nn.ModuleList(
+            [BothResBlock(k_hidden) for _ in range(num_layers - 1)]
+        )
         self.output = InvariantHead(k_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.view(x.shape[0], 24, 6)   # (batch, 24, 6) = (batch, 24, 6*1)
-        x = self.conv_layers(x)           # (batch, 24, 6*k_hidden)
+        x = x.view(x.shape[0], 24, 6)   # (batch, 24, 6*1)
+        x = F.relu(self.input_layer(x))  # (batch, 24, 6*k_hidden)
+        for block in self.blocks:
+            x = block(x)
         return self.output(x)             # (batch, 1)
 
 
@@ -104,24 +110,26 @@ class ColorValueNet(nn.Module):
 
     Architecture:
         (batch, 144) → reshape (batch, 24, 6)          [= (batch, 24, 6*1)]
-        ColorConvLayer(1, k_hidden) + ReLU
-        [ColorConvLayer(k_hidden, k_hidden) + ReLU] × (num_layers - 1)
+        ColorConvLayer(1, k_hidden) + ReLU              [input projection]
+        ColorResBlock(k_hidden) × (num_layers - 1)      [pre-norm residual blocks]
         InvariantHead(k_hidden) → (batch, 1)
 
-    k_hidden=14 gives 84 effective channels, matching BothValueNet.
+    k_hidden=96 gives ~39K params, matching BothValueNet(k_hidden=20).
     """
 
-    def __init__(self, k_hidden: int = 14, num_layers: int = 3):
+    def __init__(self, k_hidden: int = 96, num_layers: int = 3):
         super().__init__()
-        layers = [ColorConvLayer(1, k_hidden), nn.ReLU()]
-        for _ in range(num_layers - 1):
-            layers += [ColorConvLayer(k_hidden, k_hidden), nn.ReLU()]
-        self.conv_layers = nn.Sequential(*layers)
+        self.input_layer = ColorConvLayer(1, k_hidden)
+        self.blocks = nn.ModuleList(
+            [ColorResBlock(k_hidden) for _ in range(num_layers - 1)]
+        )
         self.output = InvariantHead(k_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.view(x.shape[0], 24, 6)   # (batch, 24, 6*1)
-        x = self.conv_layers(x)           # (batch, 24, 6*k_hidden)
+        x = F.relu(self.input_layer(x))  # (batch, 24, 6*k_hidden)
+        for block in self.blocks:
+            x = block(x)
         return self.output(x)             # (batch, 1)
 
 
@@ -264,22 +272,26 @@ def load_model(model_type: str, path: str) -> nn.Module:
     else:
         state = data
 
+    def _count_layers(state):
+        n_blocks = sum(1 for k in state if k.startswith('blocks.') and k.endswith('.conv.weight'))
+        return n_blocks + 1   # blocks + input_layer
+
     if model_type == 'emlp_rot':
-        # conv_layers.0.weight: (c_hidden, 6, n_orbits)
-        c_hidden = state['conv_layers.0.weight'].shape[0]
-        model = RotValueNet(c_hidden=c_hidden)
+        # input_layer.weight: (c_hidden, 6, n_orbits)
+        c_hidden = state['input_layer.weight'].shape[0]
+        model = RotValueNet(c_hidden=c_hidden, num_layers=_count_layers(state))
 
     elif model_type == 'emlp_both':
-        # conv_layers.0.weight: (k_out, k_in=1, n_sp, n_co)
-        k_hidden = state['conv_layers.0.weight'].shape[0]
-        model = BothValueNet(k_hidden=k_hidden)
+        # input_layer.weight: (k_hidden, k_in=1, n_sp, n_co)
+        k_hidden = state['input_layer.weight'].shape[0]
+        model = BothValueNet(k_hidden=k_hidden, num_layers=_count_layers(state))
 
     elif model_type == 'emlp_col':
-        # conv_layers.0.weight: (k_out, k_in=1, n_co)
-        k_hidden = state['conv_layers.0.weight'].shape[0]
-        model = ColorValueNet(k_hidden=k_hidden)
+        # input_layer.weight: (k_hidden, k_in=1, n_co)
+        k_hidden = state['input_layer.weight'].shape[0]
+        model = ColorValueNet(k_hidden=k_hidden, num_layers=_count_layers(state))
 
-    elif model_type in ('mlp', 'mlp_aug'):
+    elif model_type in ('mlp', 'mlp_aug', 'mlp_matched'):
         # net.0.weight: (hidden_dim, 144)
         hidden_dim = state['net.0.weight'].shape[0]
         model = MLPValueNet(hidden_dim=hidden_dim)

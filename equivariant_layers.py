@@ -4,22 +4,29 @@ Pure PyTorch equivariant layers for the 2x2x2 Pocket Cube.
 Spatial-only (emlp_rot):
   GroupConvLayer    (batch, 24, c_in) -> (batch, 24, c_out)
   InvariantLinear   (batch, 24, c_in) -> (batch, 1)   [average over positions]
+  RotResBlock       (batch, 24, c)    -> (batch, 24, c)   [pre-norm residual]
 
 Spatial + color (emlp_both):
-  BothConvLayer  (batch, 24, 6*k_in) -> (batch, 24, 6*k_out)
-  InvariantHead  (batch, 24, 6*k_in) -> (batch, 1)
+  BothConvLayer   (batch, 24, 6*k_in) -> (batch, 24, 6*k_out)
+  InvariantHead   (batch, 24, 6*k_in) -> (batch, 1)
+  BothResBlock    (batch, 24, 6*k)    -> (batch, 24, 6*k)  [pre-norm residual]
 
 Color-only S6 (emlp_col):
   ColorConvLayer  (batch, 24, 6*k_in) -> (batch, 24, 6*k_out)
-  InvariantHead   (batch, 24, 6*k_in) -> (batch, 1)   [shared with above]
+  InvariantHead   (batch, 24, 6*k_in) -> (batch, 1)         [shared with above]
+  ColorResBlock   (batch, 24, 6*k)    -> (batch, 24, 6*k)   [pre-norm residual]
 
 Both color-equivariant families use InvariantHead and require hidden channel
 counts to be multiples of 6 (one block per copy of the S6 rep).
+
+BothConvLayer and ColorConvLayer use an α/β decomposition to avoid ever
+materializing a 6D kernel, keeping peak memory linear in k rather than k².
 """
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from cube_symmetry import (
     ALL_ROTATIONS,
@@ -79,6 +86,23 @@ class InvariantLinear(nn.Module):
         return self.linear(pooled)   # (batch, 1)
 
 
+class RotResBlock(nn.Module):
+    """Pre-norm residual block: (batch, 24, c) -> (batch, 24, c).
+
+    LayerNorm over channels, then GroupConvLayer, then ReLU, plus skip.
+    Equivariant to spatial rotations (LayerNorm over channels preserves
+    equivariance; skip connection preserves it trivially).
+    """
+
+    def __init__(self, c_hidden: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(c_hidden)
+        self.conv = GroupConvLayer(c_hidden, c_hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + F.relu(self.conv(self.norm(x)))
+
+
 # ─── Spatial + color layers ──────────────────────────────────────────────────
 
 class BothConvLayer(nn.Module):
@@ -98,12 +122,14 @@ class BothConvLayer(nn.Module):
     where the last dimension indexes the 2 color-pair orbits under S6
     (same-color: a==b, and different-color: a≠b).
 
-    Total free parameters: k_out × k_in × n_spatial_orbits × 2
-    Compare to unconstrained: (6k_out) × (6k_in) × 24 × 24
+    Forward uses an α/β decomposition to avoid materializing the full
+    (k_out, k_in, 24, 24, 6, 6) kernel:
 
-        out[b, i, ko, do] = Σ_{j,ki,ci}
-            weight[ko, ki, sp_orbit(i,j), co_orbit(do,ci)] * x[b, j, ki, ci]
-          + bias[ko]
+        α = weight[..., 0] - weight[..., 1]   (same-color minus diff-color)
+        β = weight[..., 1]                     (diff-color coefficient)
+
+        out[b,i,ko,d] = Σ_{j,ki} α[ko,ki,sp(i,j)] * x[b,j,ki,d]      # per-color spatial conv
+                      + Σ_{j,ki} β[ko,ki,sp(i,j)] * x_sum[b,j,ki]    # color-sum spatial conv
     """
 
     def __init__(self, k_in: int, k_out: int):
@@ -112,13 +138,11 @@ class BothConvLayer(nn.Module):
         self.k_out = k_out
 
         sp_orbit, n_sp = compute_spatial_pair_orbits()
-        co_orbit, n_co = compute_color_pair_orbits()    # n_co = 2
+        _, n_co = compute_color_pair_orbits()    # n_co = 2
 
         self.register_buffer('sp_orbit', torch.tensor(sp_orbit, dtype=torch.long))
-        self.register_buffer('co_orbit', torch.tensor(co_orbit, dtype=torch.long))
 
         self.weight = nn.Parameter(torch.empty(k_out, k_in, n_sp, n_co))
-        # One bias scalar per output block, shared across positions and colors.
         self.bias = nn.Parameter(torch.zeros(k_out))
 
         nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
@@ -128,22 +152,23 @@ class BothConvLayer(nn.Module):
         B = x.shape[0]
         x = x.view(B, 24, self.k_in, 6)  # (B, pos_j, block_in, color_in)
 
-        # Build full kernel via orbit lookup:
-        #   weight[:, :, sp_orbit, :]  ->  (k_out, k_in, 24, 24, 2)
-        #   [..., co_orbit]            ->  (k_out, k_in, 24, 24, 6, 6)
-        kernel = self.weight[:, :, self.sp_orbit, :]        # (k_out, k_in, 24, 24, 2)
-        kernel_full = kernel[:, :, :, :, self.co_orbit]     # (k_out, k_in, 24, 24, 6, 6)
-        #                                   o   k   i   j   d   c
+        # Decompose weight into per-color (α) and color-sum (β) components.
+        # Avoids materializing the (k_out, k_in, 24, 24, 6, 6) kernel.
+        alpha = self.weight[:, :, :, 0] - self.weight[:, :, :, 1]  # (k_out, k_in, n_sp)
+        beta  = self.weight[:, :, :, 1]                              # (k_out, k_in, n_sp)
 
-        # Contract:
-        #   x:           b j k c
-        #   kernel_full: o k i j d c
-        #   out:         b i o d
-        out = torch.einsum('bjkc,okijdc->biod', x, kernel_full)
+        alpha_kernel = alpha[:, :, self.sp_orbit]  # (k_out, k_in, 24, 24)
+        beta_kernel  = beta[:, :, self.sp_orbit]   # (k_out, k_in, 24, 24)
 
-        # bias: (k_out,) -> broadcast over (B, 24, k_out, 6)
+        # Term 1: spatial group conv applied independently per color channel
+        term1 = torch.einsum('bjkd,okij->biod', x, alpha_kernel)  # (B, 24, k_out, 6)
+
+        # Term 2: spatial group conv on color sum, broadcast over output colors
+        x_sum = x.sum(dim=3)                                        # (B, 24, k_in)
+        term2 = torch.einsum('bjk,okij->bio', x_sum, beta_kernel)  # (B, 24, k_out)
+
+        out = term1 + term2.unsqueeze(-1)
         out = out + self.bias[None, None, :, None]
-
         return out.reshape(B, 24, self.k_out * 6)
 
 
@@ -168,6 +193,23 @@ class InvariantHead(nn.Module):
         return self.linear(pooled)        # (B, 1)
 
 
+class BothResBlock(nn.Module):
+    """Pre-norm residual block: (batch, 24, 6*k) -> (batch, 24, 6*k).
+
+    LayerNorm over the 6*k channel dimension is equivariant to S6 (permuting
+    colors within blocks leaves the global mean/std unchanged) and to spatial
+    rotations (positions are normalized independently).
+    """
+
+    def __init__(self, k_hidden: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(6 * k_hidden)
+        self.conv = BothConvLayer(k_hidden, k_hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + F.relu(self.conv(self.norm(x)))
+
+
 # ─── Color-only layers (S6, no spatial equivariance) ─────────────────────────
 
 class ColorConvLayer(nn.Module):
@@ -177,14 +219,15 @@ class ColorConvLayer(nn.Module):
     The 24 position axis has no group action — each position is processed
     independently with shared weights (weight-tying across positions).
 
-    weight: (k_out, k_in, n_co)  where n_co = 2 (same/diff color pair orbits)
+    weight: (k_out, k_in, 2)  — one scalar per (block pair, color orbit)
 
-        out[b, i, ko, do] = Σ_{ki, ci}
-            weight[ko, ki, co_orbit(do, ci)] * x[b, i, ki, ci]
-          + bias[ko]
+    Forward uses the same α/β decomposition as BothConvLayer:
 
-    Total free parameters: k_out × k_in × 2 + k_out
-    Compare to BothConvLayer: k_out × k_in × n_spatial_orbits × 2 + k_out
+        α = weight[..., 0] - weight[..., 1]
+        β = weight[..., 1]
+
+        out[b,i,ko,d] = Σ_{ki} α[ko,ki] * x[b,i,ki,d]        # per-color linear
+                      + Σ_{ki} β[ko,ki] * x_sum[b,i,ki]       # color-sum linear
     """
 
     def __init__(self, k_in: int, k_out: int):
@@ -192,8 +235,7 @@ class ColorConvLayer(nn.Module):
         self.k_in = k_in
         self.k_out = k_out
 
-        co_orbit, n_co = compute_color_pair_orbits()   # n_co = 2
-        self.register_buffer('co_orbit', torch.tensor(co_orbit, dtype=torch.long))
+        _, n_co = compute_color_pair_orbits()   # n_co = 2
 
         self.weight = nn.Parameter(torch.empty(k_out, k_in, n_co))
         self.bias = nn.Parameter(torch.zeros(k_out))
@@ -204,16 +246,31 @@ class ColorConvLayer(nn.Module):
         B = x.shape[0]
         x = x.view(B, 24, self.k_in, 6)  # (B, pos, block_in, color_in)
 
-        # Build full kernel via color orbit lookup:
-        #   weight[:, :, co_orbit]  ->  (k_out, k_in, 6, 6)
-        kernel = self.weight[:, :, self.co_orbit]   # (k_out, k_in, 6, 6)
-        #                               o    k   d  c
+        alpha = self.weight[:, :, 0] - self.weight[:, :, 1]  # (k_out, k_in)
+        beta  = self.weight[:, :, 1]                           # (k_out, k_in)
 
-        # Contract over (block_in, color_in); positions are independent:
-        #   x:      b i k c
-        #   kernel: o k d c
-        #   out:    b i o d
-        out = torch.einsum('bikc,okdc->biod', x, kernel)
+        # Term 1: per-color linear (positions independent)
+        term1 = torch.einsum('bikd,ok->biod', x, alpha)  # (B, 24, k_out, 6)
 
+        # Term 2: color-sum linear, broadcast over output colors
+        x_sum = x.sum(dim=3)                               # (B, 24, k_in)
+        term2 = torch.einsum('bik,ok->bio', x_sum, beta)  # (B, 24, k_out)
+
+        out = term1 + term2.unsqueeze(-1)
         out = out + self.bias[None, None, :, None]
         return out.reshape(B, 24, self.k_out * 6)
+
+
+class ColorResBlock(nn.Module):
+    """Pre-norm residual block: (batch, 24, 6*k) -> (batch, 24, 6*k).
+
+    Equivariant to S6 for the same reason as BothResBlock.
+    """
+
+    def __init__(self, k_hidden: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(6 * k_hidden)
+        self.conv = ColorConvLayer(k_hidden, k_hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + F.relu(self.conv(self.norm(x)))

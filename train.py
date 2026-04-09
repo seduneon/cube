@@ -18,10 +18,14 @@ import time
 import argparse
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from models import MODEL_REGISTRY, build_model, get_param_count, save_checkpoint, DEVICE
 from cube_symmetry import ALL_ROTATIONS, ALL_COLOR_PERMS
 from dataset import load_dataset, DATA_DIR, MAX_DISTANCE
+
+# Precomputed array form of rotations for vectorised augmentation
+_ALL_ROTATIONS_ARR = np.stack(ALL_ROTATIONS).astype(np.int64)  # (24, 24)
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 CKPT_DIR = os.path.join(RESULTS_DIR, "checkpoints")
@@ -33,14 +37,16 @@ MAX_EPOCHS = 200
 EARLY_STOP_PATIENCE = 15
 LR_INIT = 1e-3
 LR_MIN = 1e-5
+WEIGHT_DECAY = 1e-4
+HUBER_DELTA = 0.1   # in normalised-distance units ([0, 1] range)
 NUM_LAYERS = 3
 
 # Per-model width.  emlp_rot/mlp widths give comparable hidden features;
 # emlp_both/emlp_col k=20 → 120 channels/position = 2880 total features.
 MODEL_WIDTHS = {
-    "emlp_rot":     28,  # c_hidden = 28  (spatial only, ~42K params)
-    "emlp_both":    20,  # k_hidden = 20  → ~39K params; 9× fewer FLOPs than k=60
-    "emlp_col":     20,  # k_hidden = 20  (color only, ~6K params at k=20)
+    "emlp_rot":     28,  # c_hidden = 28  (spatial only, ~43K params)
+    "emlp_both":    20,  # k_hidden = 20  → ~40K params
+    "emlp_col":     96,  # k_hidden = 96  → ~40K params  (parameter-matched to emlp_both)
     "mlp":         256,  # hidden_dim = 256, ~169K params  (large unconstrained baseline)
     "mlp_aug":     110,  # hidden_dim = 110, ~40K params   (matched to equivariant)
     "mlp_matched": 110,  # hidden_dim = 110, ~40K params   (parameter-matched to emlp_rot)
@@ -75,26 +81,35 @@ def make_batches(X, y, batch_size, rng):
 # ─── Data augmentation ────────────────────────────────────────────────────────
 
 def apply_augmentation(x_batch: np.ndarray, rng: np.random.RandomState) -> np.ndarray:
-    """Apply a random spatial rotation AND a random S6 color permutation to the batch.
+    """Apply an independent random (spatial rotation, S6 color perm) to each sample.
 
-    Equivalent to training on 24 × 720 = 17,280× more data.
-    Uses the same transform for every sample in the batch (one random draw
-    per mini-batch).
+    Draws a fresh transform per sample rather than one per batch, giving the
+    full 17,280-fold diversity within every mini-batch.
 
     x_batch : (N, 144) float32 one-hot
-    Returns  : (N, 144) float32, copy with both symmetries applied.
+    Returns  : (N, 144) float32 copy with both symmetries applied.
     """
-    # Random spatial rotation — use inverse perm (argsort) for gather
-    rot = ALL_ROTATIONS[rng.randint(0, len(ALL_ROTATIONS))]
-    rot_inv = np.argsort(rot.astype(np.int64))   # inverse permutation for gather
+    N = x_batch.shape[0]
 
-    # Random color permutation
-    color_perm = ALL_COLOR_PERMS[rng.randint(0, len(ALL_COLOR_PERMS))]
+    rot_idx   = rng.randint(0, 24,  size=N)                         # (N,)
+    color_idx = rng.randint(0, 720, size=N)                         # (N,)
 
-    x = x_batch.reshape(-1, 24, 6)
-    x = x[:, rot_inv, :]      # permute sticker positions (spatial rotation)
-    x = x[:, :, color_perm]   # permute color channels
-    return x.reshape(-1, 144).copy()
+    rots = _ALL_ROTATIONS_ARR[rot_idx]                              # (N, 24) forward perms
+    cols = ALL_COLOR_PERMS[color_idx].astype(np.int64)              # (N, 6)
+
+    rots_inv = np.argsort(rots, axis=1)                             # (N, 24) gather indices
+
+    x = x_batch.reshape(N, 24, 6)
+
+    # Apply per-sample spatial rotation via fancy indexing (always copies)
+    x = x[np.arange(N)[:, None], rots_inv, :]                      # (N, 24, 6)
+
+    # Apply per-sample color permutation
+    x = x[np.arange(N)[:, None, None],
+           np.arange(24)[None, :, None],
+           cols[:, None, :]]                                         # (N, 24, 6)
+
+    return x.reshape(N, 144).copy()
 
 
 # ─── Training ─────────────────────────────────────────────────────────────────
@@ -144,7 +159,7 @@ def train_one(model_type, train_size, seed, verbose=True):
         if spec.color_augment:
             print("            [spatial + color augmentation enabled]")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR_INIT)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR_INIT, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=MAX_EPOCHS, eta_min=LR_MIN)
 
@@ -172,7 +187,7 @@ def train_one(model_type, train_size, seed, verbose=True):
 
             optimizer.zero_grad()
             pred = model(x_t).squeeze()
-            loss = ((pred - y_t) ** 2).mean()
+            loss = F.huber_loss(pred, y_t, delta=HUBER_DELTA)
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
