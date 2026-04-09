@@ -1,17 +1,20 @@
 """
 Pure PyTorch equivariant layers for the 2x2x2 Pocket Cube.
 
-Spatial-only (original):
+Spatial-only (emlp_rot):
   GroupConvLayer    (batch, 24, c_in) -> (batch, 24, c_out)
   InvariantLinear   (batch, 24, c_in) -> (batch, 1)   [average over positions]
 
-Spatial + color (new):
-  ColorEquivariantConvLayer  (batch, 24, 6*k_in) -> (batch, 24, 6*k_out)
-  InvariantHead              (batch, 24, 6*k_in) -> (batch, 1)
+Spatial + color (emlp_both):
+  BothConvLayer  (batch, 24, 6*k_in) -> (batch, 24, 6*k_out)
+  InvariantHead  (batch, 24, 6*k_in) -> (batch, 1)
 
-Both layer families share the same input/output shape convention so they can
-be mixed in nn.Sequential.  The color-equivariant family requires hidden
-channel counts to be multiples of 6 (one block per copy of the S6 rep).
+Color-only S6 (emlp_col):
+  ColorConvLayer  (batch, 24, 6*k_in) -> (batch, 24, 6*k_out)
+  InvariantHead   (batch, 24, 6*k_in) -> (batch, 1)   [shared with above]
+
+Both color-equivariant families use InvariantHead and require hidden channel
+counts to be multiples of 6 (one block per copy of the S6 rep).
 """
 
 import numpy as np
@@ -78,7 +81,7 @@ class InvariantLinear(nn.Module):
 
 # ─── Spatial + color layers ──────────────────────────────────────────────────
 
-class ColorEquivariantConvLayer(nn.Module):
+class BothConvLayer(nn.Module):
     """Equivariant linear layer: (batch, 24, 6*k_in) -> (batch, 24, 6*k_out).
 
     Equivariant to the combined group G = O × S6 (17,280 elements):
@@ -163,3 +166,54 @@ class InvariantHead(nn.Module):
         x = x.view(B, 24, self.k_in, 6)
         pooled = x.mean(dim=(1, 3))      # (B, k_in) — avg over positions and colors
         return self.linear(pooled)        # (B, 1)
+
+
+# ─── Color-only layers (S6, no spatial equivariance) ─────────────────────────
+
+class ColorConvLayer(nn.Module):
+    """Equivariant linear layer: (batch, 24, 6*k_in) -> (batch, 24, 6*k_out).
+
+    Equivariant to S6 acting on the 6-channel color axis only.
+    The 24 position axis has no group action — each position is processed
+    independently with shared weights (weight-tying across positions).
+
+    weight: (k_out, k_in, n_co)  where n_co = 2 (same/diff color pair orbits)
+
+        out[b, i, ko, do] = Σ_{ki, ci}
+            weight[ko, ki, co_orbit(do, ci)] * x[b, i, ki, ci]
+          + bias[ko]
+
+    Total free parameters: k_out × k_in × 2 + k_out
+    Compare to BothConvLayer: k_out × k_in × n_spatial_orbits × 2 + k_out
+    """
+
+    def __init__(self, k_in: int, k_out: int):
+        super().__init__()
+        self.k_in = k_in
+        self.k_out = k_out
+
+        co_orbit, n_co = compute_color_pair_orbits()   # n_co = 2
+        self.register_buffer('co_orbit', torch.tensor(co_orbit, dtype=torch.long))
+
+        self.weight = nn.Parameter(torch.empty(k_out, k_in, n_co))
+        self.bias = nn.Parameter(torch.zeros(k_out))
+        nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, 24, 6*k_in)
+        B = x.shape[0]
+        x = x.view(B, 24, self.k_in, 6)  # (B, pos, block_in, color_in)
+
+        # Build full kernel via color orbit lookup:
+        #   weight[:, :, co_orbit]  ->  (k_out, k_in, 6, 6)
+        kernel = self.weight[:, :, self.co_orbit]   # (k_out, k_in, 6, 6)
+        #                               o    k   d  c
+
+        # Contract over (block_in, color_in); positions are independent:
+        #   x:      b i k c
+        #   kernel: o k d c
+        #   out:    b i o d
+        out = torch.einsum('bikc,okdc->biod', x, kernel)
+
+        out = out + self.bias[None, None, :, None]
+        return out.reshape(B, 24, self.k_out * 6)

@@ -15,10 +15,11 @@ Usage:
     python run_all.py --skip-data              # reuse existing datasets
     python run_all.py --skip-train             # only evaluate existing checkpoints
     python run_all.py --quick                  # small test run (1K samples, 2 epochs)
-    python run_all.py --model emlp             # train only the spatial-equivariant model
-    python run_all.py --model emlp_col         # train only the color+spatial model
-    python run_all.py --model emlp emlp_col    # train both equivariant variants
-    python run_all.py --model all              # all 4 model types
+    python run_all.py --model emlp_rot              # train only the rotation-equivariant model
+    python run_all.py --model emlp_both             # train only the rotation+color model
+    python run_all.py --model emlp_col              # train only the color-equivariant model
+    python run_all.py --model emlp_rot emlp_both    # train both spatial equivariant variants
+    python run_all.py --model all                   # all model types
 """
 
 import time
@@ -29,7 +30,7 @@ from models import MODEL_REGISTRY
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
-ALL_MODEL_KEYS = list(MODEL_REGISTRY.keys())  # ["emlp", "emlp_col", "mlp", "mlp_aug"]
+ALL_MODEL_KEYS = list(MODEL_REGISTRY.keys())  # ["emlp_rot", "emlp_both", "emlp_col", "mlp", "mlp_aug", "mlp_matched"]
 
 
 def parse_args():
@@ -45,9 +46,9 @@ def parse_args():
     p.add_argument("--model",
                    nargs="+",
                    choices=ALL_MODEL_KEYS + ["all"],
-                   default=["emlp", "mlp"],
+                   default=["emlp_rot", "mlp"],
                    help="Which model type(s) to train and evaluate "
-                        "(default: emlp mlp). Use 'all' for all 4 variants.")
+                        "(default: emlp_rot mlp). Use 'all' for all variants.")
     p.add_argument("--eval-size", type=int, default=200_000,
                    choices=[50_000, 200_000, 1_000_000])
     p.add_argument("--sizes", nargs="+", choices=["50k", "200k", "1m"],

@@ -3,14 +3,15 @@ Value networks and model registry for the 2x2x2 Pocket Cube experiment.
 
 Models
 ------
-EquivariantValueNet       — group-conv equivariant to 24 spatial rotations
-EquivariantColorValueNet  — group-conv equivariant to spatial rotations × S6 color perms
-MLPValueNet               — unconstrained MLP baseline
+RotValueNet   — group-conv equivariant to 24 spatial rotations          (emlp_rot)
+BothValueNet  — group-conv equivariant to spatial rotations × S6        (emlp_both)
+ColorValueNet — group-conv equivariant to S6 color permutations only    (emlp_col)
+MLPValueNet   — unconstrained MLP baseline
 
 Registry
 --------
 ModelSpec       — dataclass describing a model variant (class, kwargs, symmetries, …)
-MODEL_REGISTRY  — dict[str, ModelSpec] with keys: "emlp", "emlp_col", "mlp", "mlp_aug"
+MODEL_REGISTRY  — dict[str, ModelSpec] with keys: "emlp_rot", "emlp_both", "emlp_col", "mlp", "mlp_aug"
 
 Adding a new model
 ------------------
@@ -31,7 +32,8 @@ from typing import Callable
 from equivariant_layers import (
     GroupConvLayer,
     InvariantLinear,
-    ColorEquivariantConvLayer,
+    BothConvLayer,
+    ColorConvLayer,
     InvariantHead,
 )
 
@@ -40,7 +42,7 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # ─── Model definitions ────────────────────────────────────────────────────────
 
-class EquivariantValueNet(nn.Module):
+class RotValueNet(nn.Module):
     """Group-conv value network equivariant to the 24 spatial cube rotations.
 
     Architecture:
@@ -64,7 +66,7 @@ class EquivariantValueNet(nn.Module):
         return self.output(x)
 
 
-class EquivariantColorValueNet(nn.Module):
+class BothValueNet(nn.Module):
     """Group-conv value network equivariant to spatial rotations × S6 color perms.
 
     Hidden channels are organized in blocks of 6 (k_hidden blocks = 6*k_hidden
@@ -72,18 +74,18 @@ class EquivariantColorValueNet(nn.Module):
 
     Architecture:
         (batch, 144) → reshape (batch, 24, 6)          [= (batch, 24, 6*1)]
-        ColorEquivariantConvLayer(1, k_hidden) + ReLU
-        [ColorEquivariantConvLayer(k_hidden, k_hidden) + ReLU] × (num_layers - 1)
+        BothConvLayer(1, k_hidden) + ReLU
+        [BothConvLayer(k_hidden, k_hidden) + ReLU] × (num_layers - 1)
         InvariantHead(k_hidden) → (batch, 1)
 
-    k_hidden=14 gives 84 effective channels, matching EquivariantValueNet(c_hidden=84).
+    k_hidden=14 gives 84 effective channels, matching RotValueNet(c_hidden=84).
     """
 
     def __init__(self, k_hidden: int = 14, num_layers: int = 3):
         super().__init__()
-        layers = [ColorEquivariantConvLayer(1, k_hidden), nn.ReLU()]
+        layers = [BothConvLayer(1, k_hidden), nn.ReLU()]
         for _ in range(num_layers - 1):
-            layers += [ColorEquivariantConvLayer(k_hidden, k_hidden), nn.ReLU()]
+            layers += [BothConvLayer(k_hidden, k_hidden), nn.ReLU()]
         self.conv_layers = nn.Sequential(*layers)
         self.output = InvariantHead(k_hidden)
 
@@ -93,10 +95,40 @@ class EquivariantColorValueNet(nn.Module):
         return self.output(x)             # (batch, 1)
 
 
+class ColorValueNet(nn.Module):
+    """Group-conv value network equivariant to S6 color permutations only.
+
+    No spatial equivariance — the 24 positions are treated as independent
+    features with shared weights.  Useful as an ablation between the
+    unconstrained MLP and the full spatial+color BothValueNet.
+
+    Architecture:
+        (batch, 144) → reshape (batch, 24, 6)          [= (batch, 24, 6*1)]
+        ColorConvLayer(1, k_hidden) + ReLU
+        [ColorConvLayer(k_hidden, k_hidden) + ReLU] × (num_layers - 1)
+        InvariantHead(k_hidden) → (batch, 1)
+
+    k_hidden=14 gives 84 effective channels, matching BothValueNet.
+    """
+
+    def __init__(self, k_hidden: int = 14, num_layers: int = 3):
+        super().__init__()
+        layers = [ColorConvLayer(1, k_hidden), nn.ReLU()]
+        for _ in range(num_layers - 1):
+            layers += [ColorConvLayer(k_hidden, k_hidden), nn.ReLU()]
+        self.conv_layers = nn.Sequential(*layers)
+        self.output = InvariantHead(k_hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.view(x.shape[0], 24, 6)   # (batch, 24, 6*1)
+        x = self.conv_layers(x)           # (batch, 24, 6*k_hidden)
+        return self.output(x)             # (batch, 1)
+
+
 class MLPValueNet(nn.Module):
     """Unconstrained MLP baseline.
 
-    hidden_dim=384 matches EquivariantValueNet(c_hidden=84)'s 24×84 effective
+    hidden_dim=384 matches RotValueNet(c_hidden=84)'s 24×84 effective
     feature count for a fair architectural-size comparison.
     """
 
@@ -138,19 +170,26 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
-    "emlp": ModelSpec(
-        key="emlp",
-        label="EMLP (spatial)",
-        model_class=EquivariantValueNet,
+    "emlp_rot": ModelSpec(
+        key="emlp_rot",
+        label="EMLP (rotation)",
+        model_class=RotValueNet,
         model_kwargs_fn=lambda w, nl: {"c_hidden": w, "num_layers": nl},
         symmetries=("spatial",),
     ),
-    "emlp_col": ModelSpec(
-        key="emlp_col",
-        label="EMLP (spatial+color)",
-        model_class=EquivariantColorValueNet,
+    "emlp_both": ModelSpec(
+        key="emlp_both",
+        label="EMLP (rotation+color)",
+        model_class=BothValueNet,
         model_kwargs_fn=lambda w, nl: {"k_hidden": w, "num_layers": nl},
         symmetries=("spatial", "color"),
+    ),
+    "emlp_col": ModelSpec(
+        key="emlp_col",
+        label="EMLP (color)",
+        model_class=ColorValueNet,
+        model_kwargs_fn=lambda w, nl: {"k_hidden": w, "num_layers": nl},
+        symmetries=("color",),
     ),
     "mlp": ModelSpec(
         key="mlp",
@@ -225,15 +264,20 @@ def load_model(model_type: str, path: str) -> nn.Module:
     else:
         state = data
 
-    if model_type == 'emlp':
+    if model_type == 'emlp_rot':
         # conv_layers.0.weight: (c_hidden, 6, n_orbits)
         c_hidden = state['conv_layers.0.weight'].shape[0]
-        model = EquivariantValueNet(c_hidden=c_hidden)
+        model = RotValueNet(c_hidden=c_hidden)
 
-    elif model_type == 'emlp_col':
+    elif model_type == 'emlp_both':
         # conv_layers.0.weight: (k_out, k_in=1, n_sp, n_co)
         k_hidden = state['conv_layers.0.weight'].shape[0]
-        model = EquivariantColorValueNet(k_hidden=k_hidden)
+        model = BothValueNet(k_hidden=k_hidden)
+
+    elif model_type == 'emlp_col':
+        # conv_layers.0.weight: (k_out, k_in=1, n_co)
+        k_hidden = state['conv_layers.0.weight'].shape[0]
+        model = ColorValueNet(k_hidden=k_hidden)
 
     elif model_type in ('mlp', 'mlp_aug'):
         # net.0.weight: (hidden_dim, 144)
@@ -251,12 +295,12 @@ def load_model(model_type: str, path: str) -> nn.Module:
 # ─── Legacy factory functions (kept for backward compatibility) ───────────────
 
 def build_emlp_model(ch: int = 84, num_layers: int = 3):
-    model = EquivariantValueNet(c_hidden=ch, num_layers=num_layers)
+    model = RotValueNet(c_hidden=ch, num_layers=num_layers)
     return model, None, None, None
 
 
 def build_emlp_color_model(k: int = 14, num_layers: int = 3):
-    model = EquivariantColorValueNet(k_hidden=k, num_layers=num_layers)
+    model = BothValueNet(k_hidden=k, num_layers=num_layers)
     return model, None, None, None
 
 
@@ -290,7 +334,7 @@ if __name__ == "__main__":
     print("-" * 50)
 
     # Default widths matching CH_EMLP=84, K_EMLP_COL=14, CH_MLP=384
-    widths = {"emlp": 84, "emlp_col": 14, "mlp": 384, "mlp_aug": 384}
+    widths = {"emlp_rot": 84, "emlp_both": 14, "emlp_col": 14, "mlp": 384, "mlp_aug": 384, "mlp_matched": 384}
     models_built = {}
     for key, spec in MODEL_REGISTRY.items():
         m = build_model(key, widths[key])
@@ -307,7 +351,7 @@ if __name__ == "__main__":
         state = apply_move(state, MOVES[0])
     x_orig = torch.tensor(encode_state(state), dtype=torch.float32).unsqueeze(0)
 
-    for key in ["emlp", "emlp_col"]:
+    for key in ["emlp_rot", "emlp_both"]:
         m = models_built[key]
         m.eval()
         with torch.no_grad():
@@ -319,9 +363,9 @@ if __name__ == "__main__":
                 max_err = max(max_err, abs(m(xr).item() - f0))
         print(f"  {key}: spatial max_err = {max_err:.2e}  (should be < 1e-4)")
 
-    # Verify color equivariance for emlp_col only
-    print("\nColor equivariance check (emlp_col only):")
-    m = models_built["emlp_col"]
+    # Verify color equivariance for emlp_both and emlp_col
+    print("\nColor equivariance check (emlp_both, emlp_col):")
+    m = models_built["emlp_both"]
     m.eval()
     x_flat = encode_state(state).reshape(1, 144).astype(np.float32)
     with torch.no_grad():
@@ -333,4 +377,4 @@ if __name__ == "__main__":
             x_perm = apply_color_perm_batch(x_flat, perm)
             fp = m(torch.tensor(x_perm)).item()
             max_err = max(max_err, abs(fp - f0))
-    print(f"  emlp_col: color max_err = {max_err:.2e}  (should be < 1e-4)")
+    print(f"  emlp_both: color max_err = {max_err:.2e}  (should be < 1e-4)")

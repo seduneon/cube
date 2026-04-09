@@ -4,8 +4,9 @@ PyTorch backend — works on Kaggle without JAX version conflicts.
 
 Usage:
     python train.py                                         # train all configs
-    python train.py --model emlp    --size 200k --seed 42
-    python train.py --model emlp_col --size 200k --seed 42
+    python train.py --model emlp_rot  --size 200k --seed 42
+    python train.py --model emlp_both --size 200k --seed 42
+    python train.py --model emlp_col  --size 200k --seed 42
     python train.py --model mlp     --size 200k --seed 42
     python train.py --model mlp_aug --size 200k --seed 42
     python train.py --model all     --size all  --seed -1  # all runs
@@ -34,14 +35,15 @@ LR_INIT = 1e-3
 LR_MIN = 1e-5
 NUM_LAYERS = 3
 
-# Per-model width.  emlp/mlp widths give comparable hidden features;
-# emlp_col k=10 → 60 channels/position = 1440 total features.
+# Per-model width.  emlp_rot/mlp widths give comparable hidden features;
+# emlp_both/emlp_col k=20 → 120 channels/position = 2880 total features.
 MODEL_WIDTHS = {
-    "emlp":         28,  # c_hidden = 28  (spatial only, ~42K params)
-    "emlp_col":     20,  # k_hidden = 20  → ~39K params; 9× fewer FLOPs than k=60
+    "emlp_rot":     28,  # c_hidden = 28  (spatial only, ~42K params)
+    "emlp_both":    20,  # k_hidden = 20  → ~39K params; 9× fewer FLOPs than k=60
+    "emlp_col":     20,  # k_hidden = 20  (color only, ~6K params at k=20)
     "mlp":         256,  # hidden_dim = 256, ~169K params  (large unconstrained baseline)
     "mlp_aug":     110,  # hidden_dim = 110, ~40K params   (matched to equivariant)
-    "mlp_matched": 110,  # hidden_dim = 110, ~40K params   (parameter-matched to emlp)
+    "mlp_matched": 110,  # hidden_dim = 110, ~40K params   (parameter-matched to emlp_rot)
 }
 
 TRAIN_SIZES = [50_000, 200_000, 1_000_000]

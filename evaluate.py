@@ -33,10 +33,11 @@ BEAM_WIDTH = 20
 # ─── Plot styling ─────────────────────────────────────────────────────────────
 
 MODEL_COLORS = {
-    "emlp":     "#2196F3",   # blue
-    "emlp_col": "#4CAF50",   # green
-    "mlp":      "#FF5722",   # orange-red
-    "mlp_aug":  "#9C27B0",   # purple
+    "emlp_rot":  "#2196F3",   # blue
+    "emlp_both": "#4CAF50",   # green
+    "emlp_col":  "#00BCD4",   # cyan
+    "mlp":       "#FF5722",   # orange-red
+    "mlp_aug":   "#9C27B0",   # purple
 }
 
 def _model_color(key):
@@ -637,7 +638,7 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
     if train_size_for_detail not in train_sizes:
         train_size_for_detail = train_sizes[-1]
     if model_types is None:
-        model_types = ["emlp", "mlp"]
+        model_types = ["emlp_rot", "mlp"]
 
     X_test, y_test = load_dataset("test")
     X_val, y_val = load_dataset("val")
@@ -739,7 +740,7 @@ if __name__ == "__main__":
                         choices=[50_000, 200_000, 1_000_000])
     parser.add_argument("--models", nargs="+",
                         choices=ALL_MODEL_TYPES,
-                        default=["emlp", "mlp"],
+                        default=["emlp_rot", "mlp"],
                         help="Model types to evaluate")
     parser.add_argument("--beam-width", type=int, default=BEAM_WIDTH,
                         help=f"Beam width for solve-rate evaluation (default: {BEAM_WIDTH})")

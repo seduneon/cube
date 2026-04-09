@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from equivariant_layers import GroupConvLayer, InvariantLinear, compute_pair_orbits
 from models import (
-    EquivariantValueNet, MLPValueNet,
+    RotValueNet, MLPValueNet,
     build_emlp_model, build_mlp_model,
     get_param_count, save_model, load_model, cosine_decay_lr,
     DEVICE,
@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     path = os.path.join(tmpdir, "emlp_test.pt")
     save_model(emlp, path)
     check("checkpoint file created", os.path.exists(path))
-    emlp2 = load_model('emlp', path)
+    emlp2 = load_model('emlp_rot', path)
     # Compare outputs
     with torch.no_grad():
         x_check = torch.randn(4, 144)
