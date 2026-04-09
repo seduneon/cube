@@ -193,17 +193,48 @@ class InvariantHead(nn.Module):
         return self.linear(pooled)        # (B, 1)
 
 
+class ColorEquivariantLayerNorm(nn.Module):
+    """LayerNorm over 6*k channels with γ/β shared within each block of 6.
+
+    Standard nn.LayerNorm has an independent γ and β per channel, so it can
+    learn different scales for each color slot and break S6 equivariance.
+    This version has one γ and one β per block, shared across all 6 colors,
+    which preserves S6 equivariance exactly.
+
+    The normalization (mean/std over all 6*k channels) is already equivariant
+    because permuting colors within blocks does not change the global statistics.
+    Only the affine parameters need tying.
+    """
+
+    def __init__(self, k_hidden: int, eps: float = 1e-5):
+        super().__init__()
+        self.k_hidden = k_hidden
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(k_hidden))   # γ, one per block
+        self.bias   = nn.Parameter(torch.zeros(k_hidden))  # β, one per block
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (..., 6*k_hidden)
+        shape = x.shape
+        mean = x.mean(dim=-1, keepdim=True)
+        var  = x.var(dim=-1, unbiased=False, keepdim=True)
+        x_norm = (x - mean) / (var + self.eps).sqrt()
+        # Reshape to (..., k_hidden, 6) so block-level γ/β broadcast over colors
+        x_norm = x_norm.view(*shape[:-1], self.k_hidden, 6)
+        x_norm = x_norm * self.weight[..., None] + self.bias[..., None]
+        return x_norm.reshape(shape)
+
+
 class BothResBlock(nn.Module):
     """Pre-norm residual block: (batch, 24, 6*k) -> (batch, 24, 6*k).
 
-    LayerNorm over the 6*k channel dimension is equivariant to S6 (permuting
-    colors within blocks leaves the global mean/std unchanged) and to spatial
-    rotations (positions are normalized independently).
+    Uses ColorEquivariantLayerNorm so that the affine parameters do not
+    break S6 equivariance.
     """
 
     def __init__(self, k_hidden: int):
         super().__init__()
-        self.norm = nn.LayerNorm(6 * k_hidden)
+        self.norm = ColorEquivariantLayerNorm(k_hidden)
         self.conv = BothConvLayer(k_hidden, k_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -264,13 +295,37 @@ class ColorConvLayer(nn.Module):
 class ColorResBlock(nn.Module):
     """Pre-norm residual block: (batch, 24, 6*k) -> (batch, 24, 6*k).
 
-    Equivariant to S6 for the same reason as BothResBlock.
+    Uses ColorEquivariantLayerNorm for the same reason as BothResBlock.
     """
 
     def __init__(self, k_hidden: int):
         super().__init__()
-        self.norm = nn.LayerNorm(6 * k_hidden)
+        self.norm = ColorEquivariantLayerNorm(k_hidden)
         self.conv = ColorConvLayer(k_hidden, k_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + F.relu(self.conv(self.norm(x)))
+
+
+class ColorOnlyInvariantHead(nn.Module):
+    """Invariant output for ColorValueNet: (batch, 24, 6*k_in) -> (batch, 1).
+
+    Averages over the 6 color channels within each block (S6 invariance) but
+    keeps all 24 positions as separate features.  The (24 * k_in)-dimensional
+    pooled representation is then mapped to a scalar via a learned linear layer.
+
+    Contrast with InvariantHead which also averages over positions — that is
+    correct for spatially equivariant models but discards all positional
+    information for color-only models.
+    """
+
+    def __init__(self, k_in: int):
+        super().__init__()
+        self.k_in = k_in
+        self.linear = nn.Linear(24 * k_in, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B = x.shape[0]
+        x = x.view(B, 24, self.k_in, 6)
+        pooled = x.mean(dim=3)                      # (B, 24, k_in) — avg over colors only
+        return self.linear(pooled.reshape(B, -1))   # (B, 1)

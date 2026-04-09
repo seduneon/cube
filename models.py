@@ -5,7 +5,7 @@ Models
 ------
 RotValueNet   — group-conv equivariant to 24 spatial rotations          (emlp_rot)
 BothValueNet  — group-conv equivariant to spatial rotations × S6        (emlp_both)
-ColorValueNet — group-conv equivariant to S6 color permutations only    (emlp_col)
+ColorValueNet — MLP on S6-invariant color-matching matrix               (emlp_col)
 MLPValueNet   — unconstrained MLP baseline
 
 Registry
@@ -36,6 +36,7 @@ from equivariant_layers import (
     BothConvLayer,
     ColorConvLayer,
     InvariantHead,
+    ColorOnlyInvariantHead,
     RotResBlock,
     BothResBlock,
     ColorResBlock,
@@ -102,35 +103,41 @@ class BothValueNet(nn.Module):
 
 
 class ColorValueNet(nn.Module):
-    """Group-conv value network equivariant to S6 color permutations only.
+    """S6-invariant value network using a color-matching matrix representation.
 
-    No spatial equivariance — the 24 positions are treated as independent
-    features with shared weights.  Useful as an ablation between the
-    unconstrained MLP and the full spatial+color BothValueNet.
+    The color-matching matrix M[i,j] = x[i,:]·x[j,:] is 1 iff positions i and j
+    share the same face color, and 0 otherwise.  This 24×24 binary matrix is the
+    *complete* S6-invariant descriptor of the cube state: two states are related by
+    a color permutation iff they have identical M.  An unconstrained MLP on the
+    flattened (batch, 576) matrix can therefore learn any S6-invariant function.
+
+    Contrast with the (broken) group-conv approach: ColorConvLayer processes each
+    position independently, so color-averaging gives the same scalar regardless of
+    which colors are where — making the output provably constant.
 
     Architecture:
-        (batch, 144) → reshape (batch, 24, 6)          [= (batch, 24, 6*1)]
-        ColorConvLayer(1, k_hidden) + ReLU              [input projection]
-        ColorResBlock(k_hidden) × (num_layers - 1)      [pre-norm residual blocks]
-        InvariantHead(k_hidden) → (batch, 1)
+        (batch, 144) → reshape (batch, 24, 6)
+        M = einsum('bid,bjd->bij', x, x)  → (batch, 576)   [S6-invariant features]
+        Linear(576, h_hidden) + ReLU      [input projection]
+        (Linear(h_hidden, h_hidden) + ReLU) × (num_layers - 1)
+        Linear(h_hidden, 1)
 
-    k_hidden=96 gives ~39K params, matching BothValueNet(k_hidden=20).
+    h_hidden=60 gives ~38K params, matching BothValueNet(k_hidden=20).
     """
 
-    def __init__(self, k_hidden: int = 96, num_layers: int = 3):
+    def __init__(self, h_hidden: int = 60, num_layers: int = 3):
         super().__init__()
-        self.input_layer = ColorConvLayer(1, k_hidden)
-        self.blocks = nn.ModuleList(
-            [ColorResBlock(k_hidden) for _ in range(num_layers - 1)]
-        )
-        self.output = InvariantHead(k_hidden)
+        layers = [nn.Linear(576, h_hidden), nn.ReLU()]
+        for _ in range(num_layers - 1):
+            layers += [nn.Linear(h_hidden, h_hidden), nn.ReLU()]
+        layers.append(nn.Linear(h_hidden, 1))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.view(x.shape[0], 24, 6)   # (batch, 24, 6*1)
-        x = F.relu(self.input_layer(x))  # (batch, 24, 6*k_hidden)
-        for block in self.blocks:
-            x = block(x)
-        return self.output(x)             # (batch, 1)
+        B = x.shape[0]
+        x = x.view(B, 24, 6)
+        M = torch.einsum('bid,bjd->bij', x, x)  # (B, 24, 24) — S6-invariant
+        return self.net(M.reshape(B, 576))
 
 
 class MLPValueNet(nn.Module):
@@ -194,9 +201,9 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     ),
     "emlp_col": ModelSpec(
         key="emlp_col",
-        label="EMLP (color)",
+        label="MLP (color-matching)",
         model_class=ColorValueNet,
-        model_kwargs_fn=lambda w, nl: {"k_hidden": w, "num_layers": nl},
+        model_kwargs_fn=lambda w, nl: {"h_hidden": w, "num_layers": nl},
         symmetries=("color",),
     ),
     "mlp": ModelSpec(
@@ -287,9 +294,10 @@ def load_model(model_type: str, path: str) -> nn.Module:
         model = BothValueNet(k_hidden=k_hidden, num_layers=_count_layers(state))
 
     elif model_type == 'emlp_col':
-        # input_layer.weight: (k_hidden, k_in=1, n_co)
-        k_hidden = state['input_layer.weight'].shape[0]
-        model = ColorValueNet(k_hidden=k_hidden, num_layers=_count_layers(state))
+        # net.0.weight: (h_hidden, 576)
+        h_hidden = state['net.0.weight'].shape[0]
+        num_layers = sum(1 for k in state if k.startswith('net.') and k.endswith('.weight')) - 1
+        model = ColorValueNet(h_hidden=h_hidden, num_layers=num_layers)
 
     elif model_type in ('mlp', 'mlp_aug', 'mlp_matched'):
         # net.0.weight: (hidden_dim, 144)
@@ -345,8 +353,8 @@ if __name__ == "__main__":
     print(f"{'Model':<20} {'Params':>10}  {'Symmetries'}")
     print("-" * 50)
 
-    # Default widths matching CH_EMLP=84, K_EMLP_COL=14, CH_MLP=384
-    widths = {"emlp_rot": 84, "emlp_both": 14, "emlp_col": 14, "mlp": 384, "mlp_aug": 384, "mlp_matched": 384}
+    # Default widths matching training defaults
+    widths = {"emlp_rot": 84, "emlp_both": 14, "emlp_col": 60, "mlp": 384, "mlp_aug": 384, "mlp_matched": 384}
     models_built = {}
     for key, spec in MODEL_REGISTRY.items():
         m = build_model(key, widths[key])
@@ -375,18 +383,19 @@ if __name__ == "__main__":
                 max_err = max(max_err, abs(m(xr).item() - f0))
         print(f"  {key}: spatial max_err = {max_err:.2e}  (should be < 1e-4)")
 
-    # Verify color equivariance for emlp_both and emlp_col
-    print("\nColor equivariance check (emlp_both, emlp_col):")
-    m = models_built["emlp_both"]
-    m.eval()
+    # Verify color invariance/equivariance for emlp_both and emlp_col
+    print("\nColor invariance check (emlp_both, emlp_col):")
     x_flat = encode_state(state).reshape(1, 144).astype(np.float32)
-    with torch.no_grad():
-        f0 = m(torch.tensor(x_flat)).item()
-        max_err = 0.0
-        rng = np.random.RandomState(0)
-        for _ in range(50):
-            perm = ALL_COLOR_PERMS[rng.randint(720)]
-            x_perm = apply_color_perm_batch(x_flat, perm)
-            fp = m(torch.tensor(x_perm)).item()
-            max_err = max(max_err, abs(fp - f0))
-    print(f"  emlp_both: color max_err = {max_err:.2e}  (should be < 1e-4)")
+    rng = np.random.RandomState(0)
+    for key in ["emlp_both", "emlp_col"]:
+        m = models_built[key]
+        m.eval()
+        with torch.no_grad():
+            f0 = m(torch.tensor(x_flat)).item()
+            max_err = 0.0
+            for _ in range(50):
+                perm = ALL_COLOR_PERMS[rng.randint(720)]
+                x_perm = apply_color_perm_batch(x_flat, perm)
+                fp = m(torch.tensor(x_perm)).item()
+                max_err = max(max_err, abs(fp - f0))
+        print(f"  {key}: color max_err = {max_err:.2e}  (should be < 1e-4)")

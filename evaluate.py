@@ -165,19 +165,27 @@ def value_prediction_metrics(predict_fn, X_test, y_test):
     rounded_acc = float(np.mean(np.round(preds) == y_true))
     corr = float(np.corrcoef(preds, y_true)[0, 1])
 
-    per_depth_mae = {}
+    per_depth_mae  = {}
+    per_depth_acc  = {}
+    per_depth_n    = {}
     for d in range(MAX_BFS_DISTANCE + 1):
         mask = y_test == d
-        if mask.sum() > 0:
+        n = int(mask.sum())
+        per_depth_n[d] = n
+        if n > 0:
             per_depth_mae[d] = float(np.mean(np.abs(preds[mask] - y_true[mask])))
+            per_depth_acc[d] = float(np.mean(np.round(preds[mask]) == y_true[mask]))
         else:
             per_depth_mae[d] = None
+            per_depth_acc[d] = None
 
     return {
         "mae": mae,
         "rounded_accuracy": rounded_acc,
         "correlation": corr,
         "per_depth_mae": per_depth_mae,
+        "per_depth_acc": per_depth_acc,
+        "per_depth_n":   per_depth_n,
     }
 
 
@@ -385,20 +393,35 @@ def plot_per_depth_accuracy(metrics_by_model):
     width = 0.8 / n_models
     x = np.arange(len(depths))
 
-    fig, ax = plt.subplots(figsize=(13, 5))
-    for i, key in enumerate(keys):
-        mae_vals = [metrics_by_model[key]["per_depth_mae"].get(d) or 0 for d in depths]
-        offset = (i - (n_models - 1) / 2) * width
-        ax.bar(x + offset, mae_vals, width, label=_model_label(key),
-               color=_model_color(key), alpha=0.8)
+    fig, (ax_mae, ax_acc) = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
+    fig.suptitle("Error by Distance", fontsize=14)
 
-    ax.set_title("Per-Depth MAE (moves)")
-    ax.set_xlabel("Optimal Distance (BFS depth)")
-    ax.set_ylabel("Mean Absolute Error (moves)")
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(d) for d in depths])
-    ax.legend()
-    ax.grid(True, alpha=0.3, axis="y")
+    for i, key in enumerate(keys):
+        offset = (i - (n_models - 1) / 2) * width
+        color  = _model_color(key)
+        label  = _model_label(key)
+
+        mae_vals = [metrics_by_model[key]["per_depth_mae"].get(d) or 0 for d in depths]
+        ax_mae.bar(x + offset, mae_vals, width, label=label, color=color, alpha=0.8)
+
+        acc_vals = [(metrics_by_model[key].get("per_depth_acc", {}).get(d) or 0) * 100
+                    for d in depths]
+        ax_acc.bar(x + offset, acc_vals, width, label=label, color=color, alpha=0.8)
+
+    ax_mae.set_ylabel("MAE (moves)")
+    ax_mae.set_title("Mean Absolute Error per depth")
+    ax_mae.legend()
+    ax_mae.grid(True, alpha=0.3, axis="y")
+
+    ax_acc.set_ylabel("Rounded accuracy (%)")
+    ax_acc.set_title("Rounded accuracy per depth")
+    ax_acc.set_ylim(0, 105)
+    ax_acc.set_xticks(x)
+    ax_acc.set_xticklabels([str(d) for d in depths])
+    ax_acc.set_xlabel("Optimal distance (BFS depth)")
+    ax_acc.legend()
+    ax_acc.grid(True, alpha=0.3, axis="y")
+
     plt.tight_layout()
     path = os.path.join(PLOT_DIR, "per_depth_accuracy.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
@@ -691,6 +714,14 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
             print(f"  MAE: {metrics['mae']:.3f} moves")
             print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
             print(f"  Pearson r: {metrics['correlation']:.4f}")
+            print(f"  {'Depth':>5}  {'N':>6}  {'MAE':>6}  {'Acc':>7}")
+            print(f"  {'─'*5}  {'─'*6}  {'─'*6}  {'─'*7}")
+            for d in range(MAX_BFS_DISTANCE + 1):
+                n   = metrics['per_depth_n'].get(d, 0)
+                mae_d = metrics['per_depth_mae'].get(d)
+                acc_d = metrics['per_depth_acc'].get(d)
+                if n > 0:
+                    print(f"  {d:>5}  {n:>6}  {mae_d:>6.3f}  {acc_d:>6.1%}")
 
             import time as _time
             _warmup = model_predict(predict_fn, X_test[:32])
