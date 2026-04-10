@@ -218,10 +218,10 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     ),
     "mlp_aug": ModelSpec(
         key="mlp_aug",
-        label="MLP + color aug",
+        label="MLP + spatial aug",
         model_class=MLPValueNet,
         model_kwargs_fn=lambda w, nl: {"hidden_dim": w, "num_layers": nl},
-        color_augment=True,
+        color_augment=True,   # flag now triggers spatial-only augmentation (see train.py)
         symmetries=(),
     ),
     "mlp_matched": ModelSpec(

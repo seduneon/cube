@@ -84,33 +84,28 @@ def make_batches(X, y, batch_size, rng):
 # ─── Data augmentation ────────────────────────────────────────────────────────
 
 def apply_augmentation(x_batch: np.ndarray, rng: np.random.RandomState) -> np.ndarray:
-    """Apply an independent random (spatial rotation, S6 color perm) to each sample.
+    """Apply a random spatial rotation to each sample in the batch.
 
-    Draws a fresh transform per sample rather than one per batch, giving the
-    full 17,280-fold diversity within every mini-batch.
+    Spatial rotations (O, 24 elements) are a valid symmetry of the BFS distance
+    function: rotating the whole cube does not change the optimal move count.
+
+    Color permutation is NOT applied here.  S₆ color permutations are NOT a valid
+    symmetry of the BFS distance function — applying a color permutation σ to state s
+    produces σ(s), whose distance to the FIXED solved state differs from d(s) (because
+    moves permute positions, not colors, so σ(s) can only reach σ(SOLVED_STATE)).
+    Training with (σ(s), label=d(s)) pairs supplies wrong labels and causes collapse.
 
     x_batch : (N, 144) float32 one-hot
-    Returns  : (N, 144) float32 copy with both symmetries applied.
+    Returns  : (N, 144) float32 copy with spatial rotation applied.
     """
     N = x_batch.shape[0]
 
-    rot_idx   = rng.randint(0, 24,  size=N)                         # (N,)
-    color_idx = rng.randint(0, 720, size=N)                         # (N,)
-
-    rots = _ALL_ROTATIONS_ARR[rot_idx]                              # (N, 24) forward perms
-    cols = ALL_COLOR_PERMS[color_idx].astype(np.int64)              # (N, 6)
-
+    rot_idx  = rng.randint(0, 24, size=N)                           # (N,)
+    rots     = _ALL_ROTATIONS_ARR[rot_idx]                          # (N, 24) forward perms
     rots_inv = np.argsort(rots, axis=1)                             # (N, 24) gather indices
 
     x = x_batch.reshape(N, 24, 6)
-
-    # Apply per-sample spatial rotation via fancy indexing (always copies)
     x = x[np.arange(N)[:, None], rots_inv, :]                      # (N, 24, 6)
-
-    # Apply per-sample color permutation
-    x = x[np.arange(N)[:, None, None],
-           np.arange(24)[None, :, None],
-           cols[:, None, :]]                                         # (N, 24, 6)
 
     return x.reshape(N, 144).copy()
 
@@ -160,7 +155,7 @@ def train_one(model_type, train_size, seed, verbose=True):
         print(f"Model:      {spec.label}")
         print(f"Parameters: {n_params:,}")
         if spec.color_augment:
-            print("            [spatial + color augmentation enabled]")
+            print("            [spatial augmentation enabled]")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR_INIT, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(

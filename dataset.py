@@ -156,12 +156,16 @@ def generate_dataset(n_samples, dist_table, rng=None,
 
 
 def _index_states_by_depth(dist_table, verbose=True):
-    """Return dict[depth -> list[state_tuple]] for depths 1..MAX_DISTANCE."""
-    states_by_depth = {d: [] for d in range(1, MAX_DISTANCE + 1)}
+    """Return dict[depth -> list[state_tuple]] for depths 0..MAX_DISTANCE.
+
+    Depth 0 (solved state) is included so models are trained on it and learn
+    to assign distance 0, which is required for greedy/beam search to terminate.
+    """
+    states_by_depth = {d: [] for d in range(0, MAX_DISTANCE + 1)}
     iterator = tqdm(dist_table.items(), total=len(dist_table),
                     desc="Indexing BFS table", disable=not verbose)
     for state_t, d in iterator:
-        if 1 <= d <= MAX_DISTANCE:
+        if 0 <= d <= MAX_DISTANCE:
             states_by_depth[d].append(state_t)
     return states_by_depth
 
@@ -201,11 +205,11 @@ def generate_train_dataset_stratified(n_total, dist_table, rng=None, verbose=Tru
 
     states_by_depth = _index_states_by_depth(dist_table, verbose)
 
-    n_depths = MAX_DISTANCE  # 14 depth levels
+    n_depths = MAX_DISTANCE + 1  # 15 depth levels: 0..14
     base = n_total // n_depths
     remainder = n_total - base * n_depths
-    n_per_depth = {d: base + (1 if d > MAX_DISTANCE - remainder else 0)
-                   for d in range(1, MAX_DISTANCE + 1)}
+    n_per_depth = {d: base + (1 if d >= MAX_DISTANCE + 1 - remainder else 0)
+                   for d in range(0, MAX_DISTANCE + 1)}
 
     return _sample_from_depth_buckets(n_per_depth, states_by_depth, rng, verbose)
 
@@ -234,21 +238,26 @@ def generate_train_dataset_sqrtweighted(n_total, dist_table, rng=None, verbose=T
 
     states_by_depth = _index_states_by_depth(dist_table, verbose)
 
-    # √count weights
-    counts = np.array([len(states_by_depth[d]) for d in range(1, MAX_DISTANCE + 1)],
+    # √count weights over depths 0..14
+    # depth 0 gets a minimum floor of 200 samples regardless of √count (only 1 state,
+    # but the model MUST see it to learn distance=0 and enable search termination)
+    DEPTH0_FLOOR = 200
+    counts = np.array([len(states_by_depth[d]) for d in range(0, MAX_DISTANCE + 1)],
                       dtype=np.float64)
     sqrt_counts = np.sqrt(counts)
     proportions = sqrt_counts / sqrt_counts.sum()
 
-    # Distribute n_total proportionally, resolving rounding to hit exact total
-    n_float = proportions * n_total
+    # Distribute n_total - DEPTH0_FLOOR among depths 1..14 proportionally
+    n_remaining = n_total - DEPTH0_FLOOR
+    n_float = proportions[1:] / proportions[1:].sum() * n_remaining
     n_per_arr = np.floor(n_float).astype(int)
-    remainder = n_total - n_per_arr.sum()
+    remainder = n_remaining - n_per_arr.sum()
     frac_parts = n_float - n_per_arr
     for idx in np.argsort(-frac_parts)[:remainder]:
         n_per_arr[idx] += 1
 
-    n_per_depth = {d: int(n_per_arr[d - 1]) for d in range(1, MAX_DISTANCE + 1)}
+    n_per_depth = {0: DEPTH0_FLOOR}
+    n_per_depth.update({d: int(n_per_arr[d - 1]) for d in range(1, MAX_DISTANCE + 1)})
 
     if verbose:
         print(f"√-weighted sampling: {n_total:,} total over {MAX_DISTANCE} depths")
