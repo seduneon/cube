@@ -66,15 +66,15 @@ def load_checkpoint(model_type, train_size, seed, verbose=True):
 def make_predict_fn(model):
     """Return a predict function: numpy (N, 144) -> numpy (N,) predictions in move units.
 
-    Models are trained on targets normalized to [0, 1].  This function scales
-    predictions back to the original distance scale (0 – MAX_DISTANCE moves)
-    so that all downstream evaluation code works in interpretable units.
+    Model outputs class logits (N, NUM_CLASSES).  Predictions are the argmax class index,
+    directly interpretable as the predicted BFS distance in moves (0 … MAX_DISTANCE).
     """
     def _predict(X_np):
         with torch.no_grad():
             x = torch.tensor(X_np, dtype=torch.float32, device=DEVICE)
-            pred = model(x).squeeze().cpu().numpy()
-            return pred * MAX_BFS_DISTANCE   # scale [0,1] → [0, MAX_DISTANCE]
+            logits = model(x)                             # (N, NUM_CLASSES)
+            pred = logits.argmax(dim=1).float().cpu().numpy()
+            return pred   # already in move units
     return _predict
 
 
@@ -155,14 +155,14 @@ def equivariance_error(predict_fn, X_test, symmetries=("spatial",),
 def value_prediction_metrics(predict_fn, X_test, y_test):
     """Compute prediction accuracy metrics.
 
-    predict_fn returns predictions already scaled to move units.
+    predict_fn returns argmax class predictions (integers) already in move units.
     y_test contains raw BFS distances (integers 0–MAX_DISTANCE).
     """
-    preds = model_predict(predict_fn, X_test)   # in move units
+    preds = model_predict(predict_fn, X_test)   # argmax predictions, in move units
     y_true = y_test.astype(np.float32)           # raw distances
 
     mae = float(np.mean(np.abs(preds - y_true)))
-    rounded_acc = float(np.mean(np.round(preds) == y_true))
+    accuracy = float(np.mean(preds == y_true))   # exact match (argmax is already integer)
     corr = float(np.corrcoef(preds, y_true)[0, 1])
 
     per_depth_mae  = {}
@@ -174,14 +174,14 @@ def value_prediction_metrics(predict_fn, X_test, y_test):
         per_depth_n[d] = n
         if n > 0:
             per_depth_mae[d] = float(np.mean(np.abs(preds[mask] - y_true[mask])))
-            per_depth_acc[d] = float(np.mean(np.round(preds[mask]) == y_true[mask]))
+            per_depth_acc[d] = float(np.mean(preds[mask] == y_true[mask]))
         else:
             per_depth_mae[d] = None
             per_depth_acc[d] = None
 
     return {
         "mae": mae,
-        "rounded_accuracy": rounded_acc,
+        "accuracy": accuracy,
         "correlation": corr,
         "per_depth_mae": per_depth_mae,
         "per_depth_acc": per_depth_acc,
@@ -321,17 +321,21 @@ def plot_learning_curves(model_types, train_size=200_000):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(f"Learning Curves (train size = {size_label(train_size)})", fontsize=14)
 
-    for ax_idx, metric in enumerate(["train_mse", "val_mse"]):
-        ax = axes[ax_idx]
-        ax.set_title(metric.replace("_", " ").title() + " (normalized)")
+    metric_cfg = [
+        ("train_loss", "Train cross-entropy loss", "Cross-entropy"),
+        ("val_loss",   "Val cross-entropy loss",   "Cross-entropy"),
+    ]
+
+    for ax, (metric, title, ylabel) in zip(axes, metric_cfg):
+        ax.set_title(title)
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("MSE")
+        ax.set_ylabel(ylabel)
 
         for key in model_types:
             all_curves = []
             for seed in SEEDS:
                 log = load_log(key, train_size, seed)
-                if log is not None:
+                if log is not None and log and metric in log[0]:
                     all_curves.append([row[metric] for row in log])
             if not all_curves:
                 continue
@@ -354,23 +358,23 @@ def plot_learning_curves(model_types, train_size=200_000):
     print(f"Saved {path}")
 
 
-def plot_data_efficiency(all_val_mses, model_types):
-    """Val MSE vs training set size.  all_val_mses is in raw move² units."""
+def plot_data_efficiency(all_val_maes, model_types):
+    """Val MAE vs training set size."""
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.set_title("Data Efficiency: Val MSE vs Training Set Size")
+    ax.set_title("Data Efficiency: Val MAE vs Training Set Size")
     ax.set_xlabel("Training set size")
-    ax.set_ylabel("Val MSE (moves²)")
+    ax.set_ylabel("Val MAE (moves)")
     ax.set_xscale("log")
     ax.set_yscale("log")
 
     for key in model_types:
         means, stds, sizes = [], [], []
         for train_size in TRAIN_SIZES:
-            mses = [all_val_mses.get((key, train_size, s)) for s in SEEDS]
-            mses = [m for m in mses if m is not None]
-            if mses:
-                means.append(np.mean(mses))
-                stds.append(np.std(mses))
+            maes = [all_val_maes.get((key, train_size, s)) for s in SEEDS]
+            maes = [m for m in maes if m is not None]
+            if maes:
+                means.append(np.mean(maes))
+                stds.append(np.std(maes))
                 sizes.append(train_size)
         if means:
             ax.errorbar(sizes, means, yerr=stds, marker="o",
@@ -413,8 +417,8 @@ def plot_per_depth_accuracy(metrics_by_model):
     ax_mae.legend()
     ax_mae.grid(True, alpha=0.3, axis="y")
 
-    ax_acc.set_ylabel("Rounded accuracy (%)")
-    ax_acc.set_title("Rounded accuracy per depth")
+    ax_acc.set_ylabel("Accuracy (%)")
+    ax_acc.set_title("Exact accuracy per depth")
     ax_acc.set_ylim(0, 105)
     ax_acc.set_xticks(x)
     ax_acc.set_xticklabels([str(d) for d in depths])
@@ -569,8 +573,8 @@ def print_summary_table(model_types, all_val_mses, val_metrics,
                         eq_errors, solve_results, train_size):
     """Print a formatted summary table across all evaluated models.
 
-    all_val_mses : dict[(key, train_size, seed) -> float]  (in move² units)
-    val_metrics  : dict[key -> {mae, rounded_accuracy, correlation, ...}]
+    all_val_mses : dict[(key, train_size, seed) -> float]  (MAE in move units)
+    val_metrics  : dict[key -> {mae, accuracy, correlation, ...}]
     eq_errors    : dict[key -> {spatial/color/combined -> float}]
     solve_results: dict[depth -> {key -> {solve_rate, ...}}]
     """
@@ -601,14 +605,14 @@ def print_summary_table(model_types, all_val_mses, val_metrics,
             return "N/A"
     row("Parameters", param_str)
 
-    # Val MSE (mean ± std across seeds, in move² units)
-    def val_mse_str(k):
+    # Val MAE (mean ± std across seeds, in move units)
+    def val_mae_str(k):
         vals = [all_val_mses.get((k, train_size, s)) for s in SEEDS]
         vals = [v for v in vals if v is not None]
         if not vals:
             return "N/A"
-        return f"{np.mean(vals):.4f}±{np.std(vals):.4f}"
-    row("Val MSE (moves²)", val_mse_str)
+        return f"{np.mean(vals):.3f}±{np.std(vals):.3f}"
+    row("Val MAE (moves)", val_mae_str)
 
     # Test MAE
     def mae_str(k):
@@ -616,11 +620,11 @@ def print_summary_table(model_types, all_val_mses, val_metrics,
         return f"{m['mae']:.3f}" if m else "N/A"
     row("Test MAE (moves)", mae_str)
 
-    # Rounded accuracy
-    def racc_str(k):
+    # Exact accuracy
+    def acc_str(k):
         m = val_metrics.get(k)
-        return f"{m['rounded_accuracy']:.1%}" if m else "N/A"
-    row("Rounded accuracy", racc_str)
+        return f"{m['accuracy']:.1%}" if m else "N/A"
+    row("Accuracy", acc_str)
 
     # Pearson r
     def corr_str(k):
@@ -663,12 +667,12 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
     if model_types is None:
         model_types = ["emlp_rot", "mlp"]
 
-    X_test, y_test = load_dataset("test")
-    X_val, y_val = load_dataset("val")
+    X_test, y_test = load_dataset("test", strategy='equal')
+    X_val, y_val   = load_dataset("val",  strategy='equal')
     print(f"Test set: {X_test.shape}, y range: {y_test.min()}–{y_test.max()}")
 
-    # all_val_mses: in move² units (predictions scaled by MAX_DISTANCE)
-    all_val_mses = {}
+    # all_val_maes: MAE in move units (argmax predictions vs true distances)
+    all_val_maes = {}
     eq_errors = {}
     val_metrics = {}
     solve_results = defaultdict(dict)
@@ -676,15 +680,15 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
     for key in model_types:
         spec = MODEL_REGISTRY.get(key)
 
-        # Data efficiency: val MSE across all train sizes and seeds
+        # Data efficiency: val MAE across all train sizes and seeds
         for train_size in train_sizes:
             for seed in SEEDS:
                 try:
                     m = load_checkpoint(key, train_size, seed, verbose=False)
                     predict_fn_m = make_predict_fn(m)
-                    preds_val = model_predict(predict_fn_m, X_val)   # in move units
-                    val_mse = float(np.mean((preds_val - y_val.astype(np.float32))**2))
-                    all_val_mses[(key, train_size, seed)] = val_mse
+                    preds_val = model_predict(predict_fn_m, X_val)   # argmax, in move units
+                    val_mae = float(np.mean(np.abs(preds_val - y_val.astype(np.float32))))
+                    all_val_maes[(key, train_size, seed)] = val_mae
                 except Exception as e:
                     print(f"  Skip (no checkpoint): {e}")
 
@@ -712,7 +716,7 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
             metrics = value_prediction_metrics(predict_fn, X_test, y_test)
             val_metrics[key] = metrics
             print(f"  MAE: {metrics['mae']:.3f} moves")
-            print(f"  Rounded accuracy: {metrics['rounded_accuracy']:.1%}")
+            print(f"  Accuracy: {metrics['accuracy']:.1%}")
             print(f"  Pearson r: {metrics['correlation']:.4f}")
             print(f"  {'Depth':>5}  {'N':>6}  {'MAE':>6}  {'Acc':>7}")
             print(f"  {'─'*5}  {'─'*6}  {'─'*6}  {'─'*7}")
@@ -743,8 +747,8 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
 
     print("\nGenerating plots...")
     plot_learning_curves(model_types, train_size=train_size_for_detail)
-    if all_val_mses:
-        plot_data_efficiency(all_val_mses, model_types)
+    if all_val_maes:
+        plot_data_efficiency(all_val_maes, model_types)
     if val_metrics:
         plot_per_depth_accuracy(val_metrics)
     if eq_errors:
@@ -754,7 +758,7 @@ def run_full_evaluation(train_size_for_detail=200_000, train_sizes=None,
         save_solve_rate_table(solve_results, model_types)
     plot_param_comparison(model_types, train_size_for_detail)
 
-    print_summary_table(model_types, all_val_mses, val_metrics,
+    print_summary_table(model_types, all_val_maes, val_metrics,
                         eq_errors, solve_results, train_size_for_detail)
 
     print("Evaluation complete. Plots saved to:", PLOT_DIR)

@@ -30,6 +30,9 @@ import torch.nn.functional as F
 from dataclasses import dataclass, field
 from typing import Callable
 
+from dataset import MAX_DISTANCE
+NUM_CLASSES = MAX_DISTANCE + 1   # 15 distance classes: 0, 1, …, 14
+
 from equivariant_layers import (
     GroupConvLayer,
     InvariantLinear,
@@ -54,7 +57,7 @@ class RotValueNet(nn.Module):
         (batch, 144) → reshape (batch, 24, 6)
         GroupConvLayer(6, c_hidden) + ReLU          [input projection]
         RotResBlock(c_hidden) × (num_layers - 1)    [pre-norm residual blocks]
-        InvariantLinear(c_hidden) → (batch, 1)
+        InvariantLinear(c_hidden) → (batch, NUM_CLASSES)   [class logits]
     """
 
     def __init__(self, c_hidden: int = 84, num_layers: int = 3):
@@ -63,7 +66,7 @@ class RotValueNet(nn.Module):
         self.blocks = nn.ModuleList(
             [RotResBlock(c_hidden) for _ in range(num_layers - 1)]
         )
-        self.output = InvariantLinear(c_hidden)
+        self.output = InvariantLinear(c_hidden, NUM_CLASSES)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.view(x.shape[0], 24, 6)
@@ -92,7 +95,7 @@ class BothValueNet(nn.Module):
         self.blocks = nn.ModuleList(
             [BothResBlock(k_hidden) for _ in range(num_layers - 1)]
         )
-        self.output = InvariantHead(k_hidden)
+        self.output = InvariantHead(k_hidden, NUM_CLASSES)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.view(x.shape[0], 24, 6)   # (batch, 24, 6*1)
@@ -130,7 +133,7 @@ class ColorValueNet(nn.Module):
         layers = [nn.Linear(576, h_hidden), nn.ReLU()]
         for _ in range(num_layers - 1):
             layers += [nn.Linear(h_hidden, h_hidden), nn.ReLU()]
-        layers.append(nn.Linear(h_hidden, 1))
+        layers.append(nn.Linear(h_hidden, NUM_CLASSES))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -152,7 +155,7 @@ class MLPValueNet(nn.Module):
         layers = [nn.Linear(144, hidden_dim), nn.ReLU()]
         for _ in range(num_layers - 1):
             layers += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
-        layers.append(nn.Linear(hidden_dim, 1))
+        layers.append(nn.Linear(hidden_dim, NUM_CLASSES))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

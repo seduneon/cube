@@ -20,7 +20,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from models import MODEL_REGISTRY, build_model, get_param_count, save_checkpoint, DEVICE
+from models import MODEL_REGISTRY, build_model, get_param_count, save_checkpoint, DEVICE, NUM_CLASSES
 from cube_symmetry import ALL_ROTATIONS, ALL_COLOR_PERMS
 from dataset import load_dataset, DATA_DIR, MAX_DISTANCE
 
@@ -38,7 +38,6 @@ EARLY_STOP_PATIENCE = 15
 LR_INIT = 1e-3
 LR_MIN = 1e-5
 WEIGHT_DECAY = 1e-4
-HUBER_DELTA = 0.1   # in normalised-distance units ([0, 1] range)
 NUM_LAYERS = 3
 
 # Per-model width.  emlp_rot/mlp widths give comparable hidden features;
@@ -65,8 +64,12 @@ def size_label(n):
 
 
 def load_split(split, n_train=None):
-    stratified = (split == "train" and n_train is not None)
-    return load_dataset(split, n_train, stratified=stratified)
+    if split == "train":
+        return load_dataset(split, n_train, strategy='sqrt')
+    elif split == "val":
+        return load_dataset(split, strategy='equal')   # stratified, better early-stopping
+    else:
+        return load_dataset(split, strategy='equal')
 
 
 def make_batches(X, y, batch_size, rng):
@@ -139,13 +142,13 @@ def train_one(model_type, train_size, seed, verbose=True):
     X_train, y_train = load_split("train", train_size)
     X_val, y_val = load_split("val")
 
-    # Normalize distances to [0, 1]
-    y_train = y_train.astype(np.float32) / MAX_DISTANCE
-    y_val   = y_val.astype(np.float32)   / MAX_DISTANCE
+    # Targets are raw integer distances (0 … MAX_DISTANCE) — used directly as class labels
+    y_train = y_train.astype(np.int64)
+    y_val   = y_val.astype(np.int64)
 
     if verbose:
         print(f"Train: {X_train.shape}, Val: {X_val.shape}")
-        print(f"Target range: [{y_train.min():.3f}, {y_train.max():.3f}]")
+        print(f"Target classes: {y_train.min()} … {y_train.max()}")
 
     # ── Model (via registry) ─────────────────────────────────────────────────
     spec = MODEL_REGISTRY[model_type]
@@ -164,10 +167,10 @@ def train_one(model_type, train_size, seed, verbose=True):
         optimizer, T_max=MAX_EPOCHS, eta_min=LR_MIN)
 
     X_val_t = torch.tensor(X_val, dtype=torch.float32, device=DEVICE)
-    y_val_t = torch.tensor(y_val, dtype=torch.float32, device=DEVICE)
+    y_val_t = torch.tensor(y_val, dtype=torch.long, device=DEVICE)
 
     # ── Training loop ────────────────────────────────────────────────────────
-    best_val_mse = float("inf")
+    best_val_loss = float("inf")
     best_epoch = 0
     patience_counter = 0
     rng = np.random.RandomState(seed + 1000)
@@ -183,11 +186,11 @@ def train_one(model_type, train_size, seed, verbose=True):
                 x_batch = apply_augmentation(x_batch, rng)
 
             x_t = torch.tensor(x_batch, dtype=torch.float32, device=DEVICE)
-            y_t = torch.tensor(y_batch, dtype=torch.float32, device=DEVICE)
+            y_t = torch.tensor(y_batch, dtype=torch.long, device=DEVICE)
 
             optimizer.zero_grad()
-            pred = model(x_t).squeeze()
-            loss = F.huber_loss(pred, y_t, delta=HUBER_DELTA)
+            logits = model(x_t)                          # (batch, NUM_CLASSES)
+            loss = F.cross_entropy(logits, y_t)
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
@@ -197,33 +200,41 @@ def train_one(model_type, train_size, seed, verbose=True):
 
         # ── Validation ───────────────────────────────────────────────────────
         model.eval()
-        val_losses = []
+        val_ce_losses = []
+        val_mae_sum = 0.0
+        val_n = 0
         with torch.no_grad():
             for start in range(0, len(X_val), BATCH_SIZE * 4):
                 end = min(start + BATCH_SIZE * 4, len(X_val))
-                pred_v = model(X_val_t[start:end]).squeeze()
-                vl = ((pred_v - y_val_t[start:end]) ** 2).mean()
-                val_losses.append(vl.item())
+                logits_v = model(X_val_t[start:end])         # (n, NUM_CLASSES)
+                y_v = y_val_t[start:end]
+                val_ce_losses.append(F.cross_entropy(logits_v, y_v).item())
+                preds_v = logits_v.argmax(dim=1)             # predicted class
+                val_mae_sum += (preds_v - y_v).abs().float().sum().item()
+                val_n += len(y_v)
 
-        train_mse = float(np.mean(train_losses))
-        val_mse   = float(np.mean(val_losses))
-        wall_time = time.time() - t0
+        train_loss = float(np.mean(train_losses))
+        val_loss   = float(np.mean(val_ce_losses))
+        val_mae    = val_mae_sum / val_n
+        wall_time  = time.time() - t0
 
         log_rows.append({
             "epoch": epoch,
-            "train_mse": train_mse,
-            "val_mse": val_mse,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_mae": val_mae,
             "lr": lr_now,
             "epoch_seconds": wall_time,
         })
 
         if verbose:
-            print(f"Epoch {epoch+1:3d} | train_mse={train_mse:.5f} "
-                  f"val_mse={val_mse:.5f} lr={lr_now:.2e} t={wall_time:.1f}s")
+            print(f"Epoch {epoch+1:3d} | train_loss={train_loss:.4f} "
+                  f"val_loss={val_loss:.4f} val_mae={val_mae:.3f} "
+                  f"lr={lr_now:.2e} t={wall_time:.1f}s")
 
         # ── Early stopping + checkpointing ────────────────────────────────────
-        if val_mse < best_val_mse:
-            best_val_mse = val_mse
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             best_epoch = epoch
             patience_counter = 0
             save_checkpoint(model, ckpt_path,
@@ -233,12 +244,12 @@ def train_one(model_type, train_size, seed, verbose=True):
                                 'seed': seed,
                                 'width': width,
                                 'num_layers': NUM_LAYERS,
-                                'max_distance': MAX_DISTANCE,
+                                'num_classes': NUM_CLASSES,
                             },
-                            best_val_mse=best_val_mse,
+                            best_val_loss=best_val_loss,
                             best_epoch=best_epoch)
             if verbose:
-                print(f"  → New best val_mse={best_val_mse:.5f}, checkpoint saved.")
+                print(f"  → New best val_loss={best_val_loss:.4f}, checkpoint saved.")
         else:
             patience_counter += 1
             if patience_counter >= EARLY_STOP_PATIENCE:
@@ -253,12 +264,12 @@ def train_one(model_type, train_size, seed, verbose=True):
         writer.writerows(log_rows)
 
     if verbose:
-        print(f"\nBest val MSE (normalized): {best_val_mse:.5f}")
+        print(f"\nBest val loss (cross-entropy): {best_val_loss:.4f}")
         print(f"Best epoch: {best_epoch+1}")
         print(f"Checkpoint: {ckpt_path}")
         print(f"Log: {log_path}")
 
-    return best_val_mse, log_rows
+    return best_val_loss, log_rows
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

@@ -155,51 +155,104 @@ def generate_dataset(n_samples, dist_table, rng=None,
     return X, y_dist
 
 
-def generate_train_dataset_stratified(n_total, dist_table, rng=None, verbose=True):
-    """Generate a training set with equal samples per BFS depth (1–14).
-
-    Samples n_total // 14 states from each depth bucket.  Depths with fewer
-    states than required are oversampled with replacement (only depths 1–3
-    are small enough to trigger this).  The result is shuffled.
-
-    This eliminates the bias of random scrambling, which heavily undersamples
-    the hardest states (depth 13–14) because long scrambles often cancel out.
-    """
-    if rng is None:
-        rng = np.random.RandomState(42)
-
-    # Index states by exact BFS depth (skip depth 0 — the solved state)
+def _index_states_by_depth(dist_table, verbose=True):
+    """Return dict[depth -> list[state_tuple]] for depths 1..MAX_DISTANCE."""
     states_by_depth = {d: [] for d in range(1, MAX_DISTANCE + 1)}
     iterator = tqdm(dist_table.items(), total=len(dist_table),
                     desc="Indexing BFS table", disable=not verbose)
     for state_t, d in iterator:
         if 1 <= d <= MAX_DISTANCE:
             states_by_depth[d].append(state_t)
+    return states_by_depth
 
-    n_depths = MAX_DISTANCE  # 14 depth levels
-    n_per_depth = n_total // n_depths
-    remainder = n_total - n_per_depth * n_depths  # distribute among deepest levels
 
+def _sample_from_depth_buckets(n_per_depth_dict, states_by_depth, rng, verbose):
+    """Given a dict[depth -> n_samples], draw states and return X, y arrays."""
     X_list, y_list = [], []
     for d in range(1, MAX_DISTANCE + 1):
         pool = states_by_depth[d]
-        # give remainder samples to the deepest depths
-        n = n_per_depth + (1 if d > MAX_DISTANCE - remainder else 0)
-        replace = len(pool) < n  # oversample only if pool too small (depths 1–3)
+        n = n_per_depth_dict[d]
+        if n == 0:
+            continue
+        replace = len(pool) < n
         indices = rng.choice(len(pool), size=n, replace=replace)
         for i in indices:
-            state = tuple_to_state(pool[i])
-            X_list.append(encode_state(state))
+            X_list.append(encode_state(tuple_to_state(pool[i])))
             y_list.append(d)
         if verbose:
             print(f"  depth {d:2d}: {len(pool):>8,} states, sampled {n}"
                   + (" (with replacement)" if replace else ""))
 
-    # Shuffle so depth order doesn't affect training
-    idx = rng.permutation(len(X_list))
-    X = np.array(X_list, dtype=np.float32)[idx]
-    y = np.array(y_list, dtype=np.int32)[idx]
+    perm = rng.permutation(len(X_list))
+    X = np.array(X_list, dtype=np.float32)[perm]
+    y = np.array(y_list, dtype=np.int32)[perm]
     return X, y
+
+
+def generate_train_dataset_stratified(n_total, dist_table, rng=None, verbose=True):
+    """Generate a training set with equal samples per BFS depth (1–14).
+
+    Samples n_total // 14 states from each depth bucket.  Depths with fewer
+    states than required are oversampled with replacement (only depths 1–3
+    are small enough to trigger this).  The result is shuffled.
+    """
+    if rng is None:
+        rng = np.random.RandomState(42)
+
+    states_by_depth = _index_states_by_depth(dist_table, verbose)
+
+    n_depths = MAX_DISTANCE  # 14 depth levels
+    base = n_total // n_depths
+    remainder = n_total - base * n_depths
+    n_per_depth = {d: base + (1 if d > MAX_DISTANCE - remainder else 0)
+                   for d in range(1, MAX_DISTANCE + 1)}
+
+    return _sample_from_depth_buckets(n_per_depth, states_by_depth, rng, verbose)
+
+
+def generate_train_dataset_sqrtweighted(n_total, dist_table, rng=None, verbose=True):
+    """Generate a training set with samples per depth ∝ √(state count at that depth).
+
+    This is a principled compromise between:
+      - Equal stratification: over-represents rare depths (depth 14 has only 276
+        states, so equal sampling repeats each one ~52× at 200K total)
+      - Proportional sampling: ~70% of samples from depths 10–12, depths 0–6 starved
+
+    √count weighting: hard depths still get more coverage than proportional gives
+    them, but depth-14 inflation is dramatically reduced (717 samples instead of
+    14K), and the bulk of training is concentrated where most of the state space
+    actually lives (depths 8–12).
+
+    Example (200K total, approximate):
+      depth  1:     6 states  →   104 samples  (17× each — vs 14K equal)
+      depth  9:  360K states  →  25.9K samples  (vs 14K equal)
+      depth 11:  1.35M states → 50.2K samples  (vs 14K equal)
+      depth 14:   276 states  →   717 samples  (2.6× each — vs 14K equal)
+    """
+    if rng is None:
+        rng = np.random.RandomState(42)
+
+    states_by_depth = _index_states_by_depth(dist_table, verbose)
+
+    # √count weights
+    counts = np.array([len(states_by_depth[d]) for d in range(1, MAX_DISTANCE + 1)],
+                      dtype=np.float64)
+    sqrt_counts = np.sqrt(counts)
+    proportions = sqrt_counts / sqrt_counts.sum()
+
+    # Distribute n_total proportionally, resolving rounding to hit exact total
+    n_float = proportions * n_total
+    n_per_arr = np.floor(n_float).astype(int)
+    remainder = n_total - n_per_arr.sum()
+    frac_parts = n_float - n_per_arr
+    for idx in np.argsort(-frac_parts)[:remainder]:
+        n_per_arr[idx] += 1
+
+    n_per_depth = {d: int(n_per_arr[d - 1]) for d in range(1, MAX_DISTANCE + 1)}
+
+    if verbose:
+        print(f"√-weighted sampling: {n_total:,} total over {MAX_DISTANCE} depths")
+    return _sample_from_depth_buckets(n_per_depth, states_by_depth, rng, verbose)
 
 
 def generate_test_dataset_stratified(n_per_depth, dist_table,
@@ -239,41 +292,61 @@ def generate_test_dataset_stratified(n_per_depth, dist_table,
     return X, y_dist
 
 
-def load_dataset(split_name, n_train=None, stratified=False):
-    """Load dataset arrays from disk.
+_STRATEGY_SUFFIX = {
+    'random': '',       # legacy: X_val.npy, X_train_200k.npy
+    'equal':  '_strat', # legacy: X_train_200k_strat.npy; new: X_val_strat.npy
+    'sqrt':   '_sqrt',  # new:    X_train_200k_sqrt.npy
+}
 
-    If stratified=True and the stratified file doesn't exist yet, it is
-    generated from the BFS table and cached for future runs.
+# RNG seeds per split so datasets are reproducible
+_SPLIT_RNG_BASE = {'train': 300, 'val': 100, 'test': 200}
+
+
+def load_dataset(split_name, n_train=None, strategy='random'):
+    """Load dataset arrays from disk, generating them on first use.
+
+    strategy : 'random' | 'equal' | 'sqrt'
+      'random' — random scramble (legacy baseline)
+      'equal'  — equal samples per BFS depth (stratified)
+      'sqrt'   — samples ∝ √(state count at depth) — recommended for training
+    For val/test splits use 'random' or 'equal'.
     """
     suffix = f"_{n_train // 1000}k" if n_train is not None else ""
-    strat_suffix = "_strat" if stratified else ""
-    tag = f"{split_name}{suffix}{strat_suffix}"
+    tag = f"{split_name}{suffix}{_STRATEGY_SUFFIX[strategy]}"
 
     x_path = os.path.join(DATA_DIR, f"X_{tag}.npy")
     y_path = os.path.join(DATA_DIR, f"y_dist_{tag}.npy")
 
     if not os.path.exists(x_path):
-        if stratified and split_name == "train" and n_train is not None:
-            print(f"Stratified train file not found — generating from BFS table...")
-            dist_table, _ = load_bfs_tables()
-            rng = np.random.RandomState(300 + n_train)
-            X, y_dist = generate_train_dataset_stratified(
-                n_train, dist_table, rng=rng, verbose=True)
-            save_dataset(X, y_dist, split_name, n_train, stratified=True)
-        else:
-            raise FileNotFoundError(f"Dataset file not found: {x_path}")
+        print(f"Dataset not found — generating: {tag}")
+        dist_table, _ = load_bfs_tables()
+        seed = _SPLIT_RNG_BASE.get(split_name, 0) + (n_train or 0)
+        rng = np.random.RandomState(seed)
 
-    X = np.load(x_path)
-    y_dist = np.load(y_path)
-    return X, y_dist
+        if strategy == 'sqrt':
+            if split_name != 'train' or n_train is None:
+                raise ValueError("strategy='sqrt' is only valid for train splits")
+            X, y = generate_train_dataset_sqrtweighted(n_train, dist_table, rng=rng)
+        elif strategy == 'equal':
+            if split_name == 'train' and n_train is not None:
+                X, y = generate_train_dataset_stratified(n_train, dist_table, rng=rng)
+            else:
+                # val / test: stratified with up to 1000 per depth
+                X, y = generate_test_dataset_stratified(1000, dist_table, rng=rng)
+        else:  # 'random'
+            n = n_train if (split_name == 'train' and n_train) else 20_000
+            X, y = generate_dataset(n, dist_table, rng=rng)
+
+        save_dataset(X, y, split_name, n_train, strategy=strategy)
+
+    return np.load(x_path), np.load(y_path)
 
 
-def save_dataset(X, y_dist, split_name, n_train=None, stratified=False):
+def save_dataset(X, y_dist, split_name, n_train=None, strategy='random'):
     """Save dataset arrays to disk."""
     os.makedirs(DATA_DIR, exist_ok=True)
     suffix = f"_{n_train // 1000}k" if n_train is not None else ""
-    strat_suffix = "_strat" if stratified else ""
-    tag = f"{split_name}{suffix}{strat_suffix}"
+    tag = f"{split_name}{suffix}{_STRATEGY_SUFFIX[strategy]}"
     np.save(os.path.join(DATA_DIR, f"X_{tag}.npy"), X)
     np.save(os.path.join(DATA_DIR, f"y_dist_{tag}.npy"), y_dist)
     print(f"Saved {tag}: X={X.shape}, y_dist={y_dist.shape}")
@@ -305,27 +378,30 @@ if __name__ == "__main__":
 
     # ── Step 2: Generate datasets ─────────────────────────────────────────────
     TRAIN_SIZES = [50_000, 200_000, 1_000_000]
-    VAL_SIZE = 20_000
-    TEST_N_PER_DEPTH = 1000  # ~11K total test samples
+    TEST_N_PER_DEPTH = 1000  # ~15K total (1000 per depth × 15 depths)
 
-    rng_val = np.random.RandomState(100)
-    rng_test = np.random.RandomState(200)
+    # Validation: stratified (equal per depth) — better early-stopping signal
+    print("\nGenerating stratified validation set (equal, 1000/depth)...")
+    X_val, y_val = generate_test_dataset_stratified(
+        TEST_N_PER_DEPTH, dist_table, rng=np.random.RandomState(100))
+    save_dataset(X_val, y_val, "val", strategy='equal')
 
-    print("\nGenerating validation set...")
-    X_val, y_val_dist = generate_dataset(
-        VAL_SIZE, dist_table, rng=rng_val)
-    save_dataset(X_val, y_val_dist, "val")
+    # Test: stratified (equal per depth)
+    print("\nGenerating stratified test set (equal, 1000/depth)...")
+    X_test, y_test = generate_test_dataset_stratified(
+        TEST_N_PER_DEPTH, dist_table, rng=np.random.RandomState(200))
+    save_dataset(X_test, y_test, "test", strategy='equal')
 
-    print("\nGenerating stratified test set...")
-    X_test, y_test_dist = generate_test_dataset_stratified(
-        TEST_N_PER_DEPTH, dist_table, rng=rng_test)
-    save_dataset(X_test, y_test_dist, "test")
-
+    # Training: √-weighted (recommended) + equal (for ablation)
     for n_train in TRAIN_SIZES:
-        print(f"\nGenerating training set ({n_train:,} samples)...")
-        rng_train = np.random.RandomState(300 + n_train)
-        X_train, y_train_dist = generate_dataset(
-            n_train, dist_table, rng=rng_train)
-        save_dataset(X_train, y_train_dist, "train", n_train)
+        print(f"\nGenerating √-weighted training set ({n_train:,} samples)...")
+        X_tr, y_tr = generate_train_dataset_sqrtweighted(
+            n_train, dist_table, rng=np.random.RandomState(300 + n_train))
+        save_dataset(X_tr, y_tr, "train", n_train, strategy='sqrt')
+
+        print(f"\nGenerating equal-stratified training set ({n_train:,} samples)...")
+        X_tr, y_tr = generate_train_dataset_stratified(
+            n_train, dist_table, rng=np.random.RandomState(300 + n_train))
+        save_dataset(X_tr, y_tr, "train", n_train, strategy='equal')
 
     print("\nAll datasets generated.")

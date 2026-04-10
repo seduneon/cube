@@ -71,19 +71,19 @@ class GroupConvLayer(nn.Module):
 
 
 class InvariantLinear(nn.Module):
-    """Invariant output: (batch, 24, c_in) -> (batch, 1).
+    """Invariant output: (batch, 24, c_in) -> (batch, num_classes).
 
     Averages over the 24 position dimension (invariant to any permutation of
-    positions) then applies a scalar linear layer.
+    positions) then applies a linear layer to produce class logits.
     """
 
-    def __init__(self, c_in: int):
+    def __init__(self, c_in: int, num_classes: int = 1):
         super().__init__()
-        self.linear = nn.Linear(c_in, 1)
+        self.linear = nn.Linear(c_in, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pooled = x.mean(dim=1)       # (batch, c_in)
-        return self.linear(pooled)   # (batch, 1)
+        return self.linear(pooled)   # (batch, num_classes)
 
 
 class RotResBlock(nn.Module):
@@ -173,24 +173,24 @@ class BothConvLayer(nn.Module):
 
 
 class InvariantHead(nn.Module):
-    """Invariant output: (batch, 24, 6*k_in) -> (batch, 1).
+    """Invariant output: (batch, 24, 6*k_in) -> (batch, num_classes).
 
     Achieves invariance to both spatial rotations and color permutations by:
       1. Averaging over 24 positions (spatial invariance)
       2. Averaging over 6 color channels within each block (color invariance)
-      3. Linear on the k_in block-level scalars -> scalar output
+      3. Linear on the k_in block-level scalars -> class logits
     """
 
-    def __init__(self, k_in: int):
+    def __init__(self, k_in: int, num_classes: int = 1):
         super().__init__()
         self.k_in = k_in
-        self.linear = nn.Linear(k_in, 1)
+        self.linear = nn.Linear(k_in, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B = x.shape[0]
         x = x.view(B, 24, self.k_in, 6)
         pooled = x.mean(dim=(1, 3))      # (B, k_in) — avg over positions and colors
-        return self.linear(pooled)        # (B, 1)
+        return self.linear(pooled)        # (B, num_classes)
 
 
 class ColorEquivariantLayerNorm(nn.Module):
@@ -308,24 +308,24 @@ class ColorResBlock(nn.Module):
 
 
 class ColorOnlyInvariantHead(nn.Module):
-    """Invariant output for ColorValueNet: (batch, 24, 6*k_in) -> (batch, 1).
+    """Invariant output for ColorValueNet: (batch, 24, 6*k_in) -> (batch, num_classes).
 
     Averages over the 6 color channels within each block (S6 invariance) but
     keeps all 24 positions as separate features.  The (24 * k_in)-dimensional
-    pooled representation is then mapped to a scalar via a learned linear layer.
+    pooled representation is then mapped to class logits via a learned linear layer.
 
     Contrast with InvariantHead which also averages over positions — that is
     correct for spatially equivariant models but discards all positional
     information for color-only models.
     """
 
-    def __init__(self, k_in: int):
+    def __init__(self, k_in: int, num_classes: int = 1):
         super().__init__()
         self.k_in = k_in
-        self.linear = nn.Linear(24 * k_in, 1)
+        self.linear = nn.Linear(24 * k_in, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B = x.shape[0]
         x = x.view(B, 24, self.k_in, 6)
         pooled = x.mean(dim=3)                      # (B, 24, k_in) — avg over colors only
-        return self.linear(pooled.reshape(B, -1))   # (B, 1)
+        return self.linear(pooled.reshape(B, -1))   # (B, num_classes)
