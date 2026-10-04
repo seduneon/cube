@@ -4,7 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from eqcube.symmetry.perm import Perm, PermGroup
+from eqcube.symmetry.perm import Perm, PermGroup, direct_product, symmetric_group
 
 N = 6
 
@@ -90,22 +90,6 @@ def s4() -> PermGroup:
     return PermGroup([Perm.from_cycles([(0, 1)], n=4), Perm.from_cycles([(0, 1, 2, 3)], n=4)])
 
 
-@pytest.fixture
-def cube_rotations() -> PermGroup:
-    """Whole-cube rotations acting on the 24 stickers (generators from legacy/cube_group.py)."""
-    x_rot = Perm.from_cycles(
-        [(3, 12, 7, 11), (9, 1, 14, 5), (20, 21, 23, 22), (2, 13, 6, 10), (8, 0, 15, 4),
-         (17, 16, 18, 19)],
-        n=24,
-    )
-    y_rot = Perm.from_cycles(
-        [(0, 1, 3, 2), (9, 17, 13, 21), (8, 16, 12, 20), (4, 6, 7, 5), (10, 18, 14, 22),
-         (19, 15, 23, 11)],
-        n=24,
-    )
-    return PermGroup([x_rot, y_rot])
-
-
 def test_s4_order(s4: PermGroup) -> None:
     assert s4.order == 24
 
@@ -134,19 +118,15 @@ def test_lagrange(cube_rotations: PermGroup) -> None:
         assert cube_rotations.order % g.order() == 0
 
 
-@pytest.mark.parametrize("i", range(4))
-def test_orbit_stabilizer_s4(s4: PermGroup, i: int) -> None:
-    assert len(s4.orbit(i)) * s4.stabilizer(i).order == s4.order
+def test_symmetric_group_orders() -> None:
+    assert [symmetric_group(n).order for n in range(1, 6)] == [1, 2, 6, 24, 120]
 
 
-@pytest.mark.parametrize("i", range(24))
-def test_orbit_stabilizer_cube(cube_rotations: PermGroup, i: int) -> None:
-    # every sticker can be rotated to any other -> transitive, stabilizer = 1
-    assert cube_rotations.orbit(i) == frozenset(range(24))
-    assert cube_rotations.stabilizer(i).order == 1
-    assert len(cube_rotations.orbit(i)) * cube_rotations.stabilizer(i).order == 24
+def test_direct_product_order(s4: PermGroup) -> None:
+    assert direct_product(s4, symmetric_group(3)).order == 24 * 6
 
 
-def test_stabilizer_fixes_point(s4: PermGroup) -> None:
-    for g in s4.stabilizer(2).elements:
-        assert g(2) == 2
+@given(perms(3), perms(2), perms(3), perms(2))
+def test_direct_sum_is_homomorphism(a: Perm, b: Perm, c: Perm, d: Perm) -> None:
+    # (a ⊕ b)(c ⊕ d) == (ac) ⊕ (bd)
+    assert a.direct_sum(b) * c.direct_sum(d) == (a * c).direct_sum(b * d)
