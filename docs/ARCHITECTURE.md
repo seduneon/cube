@@ -61,6 +61,25 @@ sticker (c, n) to (Mc, Mn). From this:
 Moves and symmetries therefore share one convention by construction. The
 hand-written v1 cycles are kept only as test oracles, and they match.
 
+## Coordinates (state <-> integer)
+
+`puzzles/pocket_coords.py` maps every state to an index in [0, 3,674,160):
+
+```
+index = perm_coord * 729 + twist_coord
+        perm_coord  = Lehmer code of the 7 movable pieces (7! = 5040)
+        twist_coord = base-3 number of 6 slot twists (the 7th is fixed by sum = 0 mod 3)
+```
+
+Twists are recorded per slot, with every slot's stickers in the same
+rotational order (`corner_slots`). A move's effect on the permutation then
+ignores twists, and its effect on twists ignores which piece is where, so
+moves act on indices through two small tables (5040×6 and 729×6), with no
+decoding. The full BFS (`bfs_distance_table`) runs on indices in about 2 s
+and stores one `int8` per state (3.6 MB). Tests check the bijections
+exhaustively, check the tables against sticker moves, and check the BFS
+counts against the known distribution.
+
 ## The symmetry finding
 
 `task_symmetry(spatial)` *computes* the symmetries of the solving task:

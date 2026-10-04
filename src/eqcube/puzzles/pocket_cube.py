@@ -136,6 +136,24 @@ def pocket_cube() -> PermutationPuzzle:
     )
 
 
+def corner_slots() -> list[tuple[int, int, int]]:
+    """The 8 corner slots as sticker triples, DBL (the fixed corner) last.
+
+    Each triple starts with the slot's U/D sticker, and the other two follow
+    in one rotational sense for every corner (det(n0, n1, n2) = +1 for the
+    face normals), so "twist" means the same thing in every slot.
+    """
+    order = ("UFR", "UFL", "UBL", "UBR", "DFR", "DFL", "DBR", "DBL")
+    slots: list[tuple[int, int, int]] = []
+    for name in order:
+        stickers = _CORNERS[name]
+        ud = next(s for s in stickers if _GEOMETRY[s][1][1] != 0)
+        a, b = (s for s in stickers if s != ud)
+        normals = np.array([_GEOMETRY[s][1] for s in (ud, a, b)])
+        slots.append((ud, a, b) if round(np.linalg.det(normals)) == 1 else (ud, b, a))
+    return slots
+
+
 # ── spatial groups (degree 24) ────────────────────────────────────────────
 
 
