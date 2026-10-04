@@ -49,7 +49,7 @@ def variants(seed: int = 42, base: TrainConfig | None = None) -> list[RunSpec]:
 def _mean(d: dict[str, float | None] | None, depths: tuple[int, ...]) -> float:
     if not d:
         return float("nan")
-    values = [d[str(k)] for k in depths if str(k) in d and d[str(k)] is not None]
+    values = [v for k in depths if (v := d.get(str(k))) is not None]
     return float(np.mean(values)) if values else float("nan")
 
 
