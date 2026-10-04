@@ -52,16 +52,20 @@ class TemperedSampler:
             out[slots] = pool[rng.integers(0, len(pool), size=len(slots))]
         return out
 
+    def depth_quota(self, n: int) -> IntArray:
+        """How many distinct states ``sample_unique(n)`` takes from each depth."""
+        sizes = self.partition.pool_sizes(self.split)
+        if n > sizes.sum():
+            raise ValueError(f"asked for {n} distinct states, split has {sizes.sum()}")
+        return _allocate(n, self.depth_probabilities(), sizes)
+
     def sample_unique(self, n: int, rng: np.random.Generator) -> IntArray:
         """n *distinct* indices, as close to the tempered depth mix as pools allow.
 
         Depths whose pool is smaller than their quota are taken whole, and the
         remainder is redistributed over the other depths in proportion.
         """
-        sizes = self.partition.pool_sizes(self.split)
-        if n > sizes.sum():
-            raise ValueError(f"asked for {n} distinct states, split has {sizes.sum()}")
-        quota = _allocate(n, self.depth_probabilities(), sizes)
+        quota = self.depth_quota(n)
         parts = [
             rng.choice(self.partition.pool(self.split, d), size=int(q), replace=False)
             for d, q in enumerate(quota)
