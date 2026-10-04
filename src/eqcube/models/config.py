@@ -106,8 +106,8 @@ PRESETS: dict[str, ModelConfig] = {
         symmetry="rotation_color", input_layout="stickers", hidden_layout="stickers", width=20
     ),
     "color": ModelConfig(symmetry="color", width=5),
-    # The computed task symmetry (C3 with recoloring).
-    "task": ModelConfig(symmetry="task", width=9),
+    # The computed task symmetry (S3: rotations + mirrors about DBL-UFR, with recoloring).
+    "task": ModelConfig(symmetry="task", width=12),
     "mlp": ModelConfig(arch="mlp", symmetry="trivial", width=256),
     "mlp_small": ModelConfig(arch="mlp", symmetry="trivial", width=110),
 }

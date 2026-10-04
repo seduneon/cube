@@ -10,12 +10,16 @@ from eqcube.puzzles.base import bfs_distances, state_keys
 from eqcube.puzzles.pocket_cube import (
     MAX_DISTANCE,
     SYMMETRIES,
+    cube_isometries,
+    cube_rotations,
+    isometry_color_group,
     pocket_cube,
     rotation_color_group,
     rotation_group,
     task_group,
 )
 from eqcube.symmetry.action import FunctionAction
+from eqcube.symmetry.perm import Perm, PermGroup
 
 PC = pocket_cube()
 DEPTH = 5
@@ -86,7 +90,8 @@ def test_group_orders() -> None:
         "rotation": 24,
         "color": 720,
         "rotation_color": 17280,
-        "task": 3,
+        "isometry_color": 34560,
+        "task": 6,
     }
 
 
@@ -101,10 +106,10 @@ def test_task_symmetry_preserves_distance() -> None:
 
 
 def test_other_symmetries_do_not_preserve_distance() -> None:
-    """Every non-task element of O x S6 sends some state out of its distance layer."""
-    action = FunctionAction(rotation_color_group(), n_domain=24)
+    """Every non-task element of O_h x S6 sends some state out of its distance layer."""
+    action = FunctionAction(isometry_color_group(), n_domain=24)
     layer = [tuple(np.frombuffer(k, dtype=np.int8).tolist()) for k, d in DIST.items() if d == 3]
-    for g in rotation_color_group().elements:
+    for g in isometry_color_group().elements:
         if g in task_group():
             continue
         assert any(DIST.get(np.array(action(g, s), dtype=np.int8).tobytes()) != 3 for s in layer)
@@ -112,3 +117,56 @@ def test_other_symmetries_do_not_preserve_distance() -> None:
 
 def test_max_distance_constant() -> None:
     assert MAX_DISTANCE == 14
+
+
+# ── geometry: moves and symmetries derived from 3D sticker coordinates ────
+
+LEGACY_CYCLES = {
+    "R": [(3, 12, 7, 11), (9, 1, 14, 5), (20, 21, 23, 22)],
+    "U": [(0, 1, 3, 2), (9, 17, 13, 21), (8, 16, 12, 20)],
+    "F": [(8, 9, 11, 10), (3, 22, 4, 17), (20, 5, 19, 2)],
+}
+
+
+def test_geometric_moves_match_hand_written_cycles() -> None:
+    for name, cycles in LEGACY_CYCLES.items():
+        assert PC.moves[PC.move_names.index(name)] == Perm.from_cycles(cycles, 24)
+
+
+def test_geometric_rotations_match_legacy_group(cube_rotations: PermGroup) -> None:
+    from eqcube.puzzles.pocket_cube import cube_rotations as geometric_rotations
+
+    assert geometric_rotations().elements == cube_rotations.elements
+
+
+def test_isometries_contain_rotations_with_index_two() -> None:
+    assert cube_isometries().order == 48
+    assert cube_rotations().elements < cube_isometries().elements
+
+
+def test_fast_task_symmetry_matches_brute_force() -> None:
+    assert PC.task_symmetry(cube_rotations()).elements == (
+        PC.task_symmetry_brute_force(rotation_color_group()).elements
+    )
+    assert task_group().elements == PC.task_symmetry_brute_force(isometry_color_group()).elements
+
+
+def test_task_group_is_s3_rotations_and_mirrors() -> None:
+    """3 rotations keep R/U/F as a set; 3 mirrors send every move to an inverse move."""
+    rotations = {g.arr[:24] for g in task_group().elements} & {
+        g.arr for g in cube_rotations().elements
+    }
+    assert len(rotations) == 3
+    names = {PC.lift_move(m): n for m, n in zip(PC.moves, PC.move_names, strict=True)}
+    for g in task_group().elements:
+        images = {n: names[g * m * g.inverse()] for m, n in names.items()}
+        is_rotation = g.arr[:24] in rotations
+        flips = all(images[n].endswith("'") != n.endswith("'") for n in images)
+        assert flips != is_rotation  # rotations keep handedness, mirrors flip it
+    assert all(g.order() in (1, 2, 3) for g in task_group().elements)  # S3 element orders
+
+
+def test_recoloring_for_rejects_impossible_relabelling() -> None:
+    # A single face turn mixes colors on faces: no recoloring can fix the solved state.
+    assert PC.recoloring_for(PC.moves[0]) is None
+    assert PC.recoloring_for(Perm.identity(24)) == Perm.identity(6)

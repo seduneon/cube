@@ -35,6 +35,7 @@ Rule: `symmetry`, `puzzles`, and `search` never import torch
 | equivariant linear map | weights tied on orbits of G on out × in | `nn/layers.py` |
 | invariant readout | mean over each point orbit | `nn/layers.py` |
 | task symmetry | {g : g·solved = solved, gMg⁻¹ = M} | `puzzles/base.py` |
+| cube isometries O, O_h | signed permutation matrices on sticker coordinates | `puzzles/pocket_cube.py` |
 
 ## Conventions (decided once, tested)
 
@@ -48,14 +49,41 @@ Rule: `symmetry`, `puzzles`, and `search` never import torch
   whenever the group moves them.
 - `GSet` equality is identity: build once, share. Orbit tables are cached.
 
+## Geometry is the source of truth
+
+`puzzles/pocket_cube.py` gives every sticker a 3D position (corner, face
+normal) with R = +x, U = +y, F = +z. A 3×3 signed permutation matrix M maps
+sticker (c, n) to (Mc, Mn). From this:
+
+- face turns R, U, F: rotate only the stickers in that layer;
+- O = ⟨x-turn, y-turn⟩ (24) and O_h = ⟨x-turn, y-turn, −I⟩ (48).
+
+Moves and symmetries therefore share one convention by construction. The
+hand-written v1 cycles are kept only as test oracles, and they match.
+
 ## The symmetry finding
 
-`task_group()` *computes* the symmetries of the solving task inside O × S6.
-The result has order 3: the rotations about the DBL–UFR diagonal, each paired
-with the recoloring that undoes it. They cycle R → U → F. Pure rotations
-(O, used by v1 and the paper) and S6 do **not** preserve BFS distance in this
-environment, because R/U/F never move the DBL corner.
-`tests/puzzles/test_pocket_cube.py` checks both claims exhaustively up to depth 5.
+`task_symmetry(spatial)` *computes* the symmetries of the solving task:
+g must keep the solved state solved (this fixes g's recoloring) and must map
+the move set to itself. Because the recoloring is determined by the spatial
+part, the search scans |O_h| = 48 candidates instead of |O_h × S6| = 34,560;
+the brute-force filter is kept as a test oracle.
+
+Result: **S3 (6 elements)**. Look at the cube from the UFR corner: the faces
+U, F, R form a triangle, and S3 is that triangle's symmetry group.
+
+- 3 rotations about the DBL–UFR diagonal cycle R → U → F;
+- 3 reflections in planes containing that diagonal send each move to an
+  inverse move (R → F', U → U', F → R', …).
+
+Pure rotations (O, used by v1 and the paper), S6, and every other element of
+O_h × S6 do **not** preserve BFS distance in this environment, because R/U/F
+never move the DBL corner. `tests/puzzles/test_pocket_cube.py` checks this
+exhaustively up to depth 5.
+
+Not yet used: **inversion**, d(g) = d(g⁻¹), which would double the group to
+12. It is not a permutation of sticker-color features, so it needs group
+averaging (with a colors → sticker-permutation decoder) or a piece encoding.
 
 ## Presets (~40k parameters each, except `mlp`)
 
@@ -64,7 +92,8 @@ environment, because R/U/F never move the DBL corner.
 | `rotation` | O on positions | positions → positions | = v1 `RotValueNet` |
 | `rotation_color` | O × S6 | stickers → stickers | = v1 `BothValueNet` (48 orbits) |
 | `color` | S6 | stickers → positions | |
-| `task` | computed C3 | stickers → positions | the correct prior |
+| `isometry_color` (symmetry only) | O_h × S6 | — | wrong prior, available via config |
+| `task` | computed S3 | stickers → positions | the correct prior |
 | `mlp`, `mlp_small` | none | one-hot → MLP | baselines |
 
 ## How to extend

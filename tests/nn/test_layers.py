@@ -81,7 +81,8 @@ def test_trivial_group_linear_is_dense() -> None:
 
 def test_pool_out_dim_counts_orbits() -> None:
     assert InvariantPool(FeatureType(gsets("rotation")["positions"], 7)).out_dim == 7
-    assert InvariantPool(FeatureType(gsets("task")["positions"], 7)).out_dim == 8 * 7
+    # mirrors fix the stickers lying on their planes, so S3 has 6 (not 24/6) orbits
+    assert InvariantPool(FeatureType(gsets("task")["positions"], 7)).out_dim == 6 * 7
 
 
 def test_mismatched_groups_rejected() -> None:

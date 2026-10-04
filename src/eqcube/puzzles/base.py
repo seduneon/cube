@@ -108,16 +108,57 @@ class PermutationPuzzle:
         """A move as a Perm of positions + colors (it does not touch colors)."""
         return move.direct_sum(Perm.identity(self.n_colors))
 
-    def task_symmetry(self, ambient: PermGroup) -> PermGroup:
-        """The symmetries of the solving task inside ``ambient``.
+    def recoloring_for(self, g: Perm) -> Perm | None:
+        """The unique color permutation that makes ``g`` (on positions) fix ``solved``.
 
-        ``ambient`` acts on P positions followed by C colors (degree P + C).
+        (g·s)[p] = s[g^{-1}(p)], so we need sigma(solved[g^{-1}(p)]) == solved[p]
+        for every p. Returns None if no such bijection exists.
+        """
+        g_inv = g.inverse()
+        sigma: dict[int, int] = {}
+        for p in range(self.n_positions):
+            a, b = self.solved[g_inv(p)], self.solved[p]
+            if sigma.setdefault(a, b) != b:
+                return None
+        if len(set(sigma.values())) != len(sigma):
+            return None
+        free = [c for c in range(self.n_colors) if c not in sigma]
+        if free:  # colors absent from the solved state: none for cubes
+            unused = [c for c in range(self.n_colors) if c not in sigma.values()]
+            sigma.update(zip(free, unused, strict=True))
+        return Perm(tuple(sigma[c] for c in range(self.n_colors)))
+
+    def task_symmetry(self, spatial: PermGroup) -> PermGroup:
+        """The symmetries of the solving task built from ``spatial`` (degree P).
+
         g is a task symmetry iff
             (1) g·solved == solved          (goal is preserved)
             (2) g M g^{-1} == M             (move set is preserved)
         Then d(g·s) = d(s) for every state s, since
             g·(m·s) = (g m g^{-1})·(g·s)
         maps shortest solutions of s to shortest solutions of g·s.
+
+        Condition (1) fixes the recoloring of each spatial element (see
+        ``recoloring_for``), so we scan |spatial| candidates instead of
+        |spatial| * C!. Returns a group of degree P + C.
+        """
+        if spatial.degree != self.n_positions:
+            raise ValueError("spatial group must act on the puzzle's positions")
+        moves = frozenset(self.moves)
+        keep: list[Perm] = []
+        for g in spatial.elements:
+            sigma = self.recoloring_for(g)
+            if sigma is None:
+                continue
+            if frozenset(g * m * g.inverse() for m in moves) == moves:
+                keep.append(g.direct_sum(sigma))
+        return PermGroup(keep)
+
+    def task_symmetry_brute_force(self, ambient: PermGroup) -> PermGroup:
+        """Same definition as ``task_symmetry``, filtering every element of ``ambient``.
+
+        ``ambient`` acts on P positions followed by C colors. Slow; kept as a
+        test oracle for the fast version.
         """
         if ambient.degree != self.n_positions + self.n_colors:
             raise ValueError("ambient group must act on positions + colors")
