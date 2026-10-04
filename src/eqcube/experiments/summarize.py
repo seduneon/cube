@@ -90,7 +90,10 @@ def band_summary(root: str | Path, band: tuple[int, ...] = BAND) -> str:
         "backup band acc", "backup best_child", "solve", "excess", "train_s",
     ]  # fmt: skip
     lines = ["| " + " | ".join(head) + " |", "|" + "---:|" * len(head)]
-    for r in sorted(load_results(root), key=lambda r: r.get("name", r["preset"])):
+    runs = load_results(root)
+    for r in sorted(
+        runs, key=lambda r: (r["train_config"]["train_size"], r.get("name", r["preset"]))
+    ):
         e = r["eval"]
         backup = e.get("backup", {})
         cal = e.get("calibration", {})
@@ -108,7 +111,8 @@ def band_summary(root: str | Path, band: tuple[int, ...] = BAND) -> str:
             _get(e, ("search/expected", "solve_rate")),
             _get(e, ("search/expected", "mean_excess")),
         ]
-        cells = [r.get("name", r["preset"]), f"{r['n_params']:,}"]
+        label = f"{r.get('name', r['preset'])} n={r['train_config']['train_size'] // 1000}k"
+        cells = [label, f"{r['n_params']:,}"]
         cells += ["—" if v is None or v != v else f"{v:.3f}" for v in values]
         cells.append(f"{r['train_seconds']:.0f}")
         lines.append("| " + " | ".join(cells) + " |")

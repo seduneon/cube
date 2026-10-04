@@ -104,7 +104,7 @@ def test_run_one_end_to_end_and_resume(tmp_path: Path) -> None:
     assert cal["temperature"] > 0 and cal["tempered"]["nll"] <= cal["raw"]["nll"] + 0.05
     assert backup["w"] + backup["beta"] > 0
     assert {"base", "backup", "siblings/base", "siblings/backup"} <= set(backup)
-    assert "| task |" in band_summary(tmp_path / "runs")
+    assert "| task n=2k |" in band_summary(tmp_path / "runs")
 
 
 def test_grid_is_a_product() -> None:
