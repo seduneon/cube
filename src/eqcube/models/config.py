@@ -29,6 +29,7 @@ class ModelConfig:
     hidden_layout: Layout = "positions"
     width: int = 32  # hidden channels (equivariant) or hidden units (mlp)
     depth: int = 3  # number of hidden layers
+    parity_mask: bool = False  # forbid distances of the wrong parity (see models/parity.py)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -81,7 +82,7 @@ def _build_equivariant(cfg: ModelConfig) -> nn.Module:
     hidden_type = FeatureType(gsets[cfg.hidden_layout], cfg.width)
 
     body = EquivariantBody(in_type, hidden_type, cfg.depth, spec.max_distance + 1)
-    return ValueNet(OneHotEncoder(c, cfg.input_layout), body)
+    return ValueNet(OneHotEncoder(c, cfg.input_layout), body, _output_filter(cfg))
 
 
 @register_arch("mlp")
@@ -90,7 +91,18 @@ def _build_mlp(cfg: ModelConfig) -> nn.Module:
     puzzle = spec.make()
     in_dim = puzzle.n_positions * puzzle.n_colors
     body = MLPBody(in_dim, cfg.width, cfg.depth, spec.max_distance + 1)
-    return ValueNet(OneHotEncoder(puzzle.n_colors, "stickers"), body)
+    return ValueNet(OneHotEncoder(puzzle.n_colors, "stickers"), body, _output_filter(cfg))
+
+
+def _output_filter(cfg: ModelConfig) -> nn.Module | None:
+    if not cfg.parity_mask:
+        return None
+    spec = PUZZLES[cfg.puzzle]
+    if spec.make_indexer is None:
+        raise ValueError(f"puzzle {cfg.puzzle!r} has no indexer, so no parity")
+    from eqcube.models.parity import ParityMask
+
+    return ParityMask(spec.make_indexer(), spec.max_distance + 1)
 
 
 # ── presets ───────────────────────────────────────────────────────────────

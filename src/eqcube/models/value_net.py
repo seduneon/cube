@@ -72,9 +72,16 @@ class MLPBody(nn.Module):
 
 
 class ValueNet(nn.Module):
-    def __init__(self, encoder: nn.Module, body: nn.Module) -> None:
+    """logits = output_filter(states, body(encoder(states))); the filter is optional."""
+
+    def __init__(
+        self, encoder: nn.Module, body: nn.Module, output_filter: nn.Module | None = None
+    ) -> None:
         super().__init__()
-        self.encoder, self.body = encoder, body
+        self.encoder, self.body, self.output_filter = encoder, body, output_filter
 
     def forward(self, states: Tensor) -> Tensor:
-        return self.body(self.encoder(states))
+        logits = self.body(self.encoder(states))
+        if self.output_filter is not None:
+            logits = self.output_filter(states, logits)
+        return logits

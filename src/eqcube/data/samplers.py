@@ -3,10 +3,14 @@
 Every sampler draws only from its split of a ``Partition``, so switching
 samplers never touches the evaluation data.
 
-  TemperedSampler(alpha)   p(depth) ∝ n_depth^alpha, uniform within a depth
+  TemperedSampler(alpha)   p(depth) ∝ n_depth^alpha * w_depth, uniform within a depth
                            alpha = 1: uniform over states
                            alpha = 0.5: sqrt weighting (v1 default)
                            alpha = 0: uniform over depths
+                           weights w: optional per-depth boost (default 1)
+                           full_depth: depths <= full_depth are taken whole
+                                       (sample_unique), so even alpha = 1
+                                       sees the solved state
   RandomWalkSampler        random scrambles of 1..max_length moves, kept
                            only if they land in the split (labels still come
                            from the exact table)
@@ -37,10 +41,16 @@ class TemperedSampler:
     partition: Partition
     alpha: float = 0.5
     split: Split = "train"
+    weights: tuple[float, ...] | None = None  # per-depth multiplier
+    full_depth: int = -1  # sample_unique takes depths <= full_depth whole
 
     def depth_probabilities(self) -> FloatArray:
         sizes = self.partition.pool_sizes(self.split).astype(np.float64)
         weights = np.where(sizes > 0, sizes**self.alpha, 0.0)
+        if self.weights is not None:
+            if len(self.weights) != len(sizes):
+                raise ValueError(f"need {len(sizes)} depth weights, got {len(self.weights)}")
+            weights = weights * np.asarray(self.weights, dtype=np.float64)
         return weights / weights.sum()
 
     def sample(self, n: int, rng: np.random.Generator) -> IntArray:
@@ -57,7 +67,12 @@ class TemperedSampler:
         sizes = self.partition.pool_sizes(self.split)
         if n > sizes.sum():
             raise ValueError(f"asked for {n} distinct states, split has {sizes.sum()}")
-        return _allocate(n, self.depth_probabilities(), sizes)
+        floor = np.where(np.arange(len(sizes)) <= self.full_depth, sizes, 0)
+        if floor.sum() > n:
+            raise ValueError(f"full_depth={self.full_depth} alone needs {floor.sum()} > {n}")
+        p = np.where(floor > 0, 0.0, self.depth_probabilities())
+        rest = _allocate(n - int(floor.sum()), p / p.sum(), sizes - floor)
+        return floor + rest
 
     def sample_unique(self, n: int, rng: np.random.Generator) -> IntArray:
         """n *distinct* indices, as close to the tempered depth mix as pools allow.

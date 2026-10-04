@@ -52,12 +52,17 @@ class RunSpec:
     model: ModelConfig
     train: TrainConfig
     eval: EvalConfig = field(default_factory=EvalConfig)
+    tag: str = ""  # names a variant (e.g. "balanced"); becomes part of run_id
+
+    @property
+    def name(self) -> str:
+        return f"{self.preset}-{self.tag}" if self.tag else self.preset
 
     @property
     def run_id(self) -> str:
         t = self.train
         sampler = f"a{t.alpha:g}" if t.sampler == "tempered" else f"walk{t.walk_length}"
-        return f"{self.preset}/n{t.train_size}_{sampler}_{t.partition.policy}_s{t.seed}"
+        return f"{self.name}/n{t.train_size}_{sampler}_{t.partition.policy}_s{t.seed}"
 
 
 def grid(
@@ -175,6 +180,8 @@ def run_one(
     result = {
         "run_id": spec.run_id,
         "preset": spec.preset,
+        "tag": spec.tag,
+        "name": spec.name,
         "model_config": spec.model.to_dict(),
         "train_config": spec.train.to_dict(),
         "device": str(trainer.device),

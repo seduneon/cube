@@ -51,8 +51,20 @@ def training_indices(cfg: TrainConfig, partition: Partition) -> IntArray:
     """The fixed training set for ``cfg`` (deterministic in cfg.seed)."""
     rng = np.random.default_rng(cfg.seed)
     if cfg.sampler == "tempered":
-        return TemperedSampler(partition, cfg.alpha).sample_unique(cfg.train_size, rng)
+        sampler = TemperedSampler(
+            partition, cfg.alpha, weights=cfg.depth_weights, full_depth=cfg.full_depth
+        )
+        return sampler.sample_unique(cfg.train_size, rng)
     return RandomWalkSampler(partition, cfg.walk_length).sample(cfg.train_size, rng)
+
+
+def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
+    """Weights that make every present class contribute equally to the mean loss."""
+    counts = torch.bincount(labels, minlength=num_classes).float()
+    present = counts > 0
+    weights = torch.zeros(num_classes, device=labels.device)
+    weights[present] = len(labels) / (present.sum() * counts[present])
+    return weights
 
 
 def validation_suite(partition: Partition, seed: int = 0) -> EvalSuite:
@@ -108,6 +120,8 @@ class Trainer:
         x_val, y_val = self._tensors(validation_suite(self.partition).index)
 
         model = build_model(self.model_cfg).to(self.device)
+        num_classes = self.table.max_distance + 1
+        loss_weight = class_weights(y_train, num_classes) if cfg.loss == "balanced_ce" else None
         n_params = sum(p.numel() for p in model.parameters())
         opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -125,7 +139,7 @@ class Trainer:
             total, seen = 0.0, 0
             for start in range(0, len(order), cfg.batch_size):
                 batch = order[start : start + cfg.batch_size]
-                loss = F.cross_entropy(model(x_train[batch]), y_train[batch])
+                loss = F.cross_entropy(model(x_train[batch]), y_train[batch], weight=loss_weight)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()

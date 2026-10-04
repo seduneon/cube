@@ -105,7 +105,7 @@ def result_rows(results_dir: str | Path) -> list[Row]:
     for d in depths:
         row: Row = {"depth": d}
         for r in runs:
-            name = r["preset"]
+            name = r.get("name", r["preset"])
             e = r["eval"]
             row[f"{name}:acc"] = e["test/per_depth"]["per_depth"]["accuracy"].get(str(d))
             row[f"{name}:mae"] = e["test/per_depth"]["per_depth"]["mae"].get(str(d))

@@ -58,8 +58,8 @@ class PocketCubeCoords:
 
         # canonical color triple (U/D color first) -> piece id
         code = self.piece_colors @ np.array([36, 6, 1])
-        self._piece_of_code = np.full(216, -1, dtype=np.int64)
-        self._piece_of_code[code] = np.arange(8)
+        self.piece_of_code = np.full(216, -1, dtype=np.int64)
+        self.piece_of_code[code] = np.arange(8)
         self._solved_index = int(self.rank(puzzle.solved_states(1))[0])
 
     @property
@@ -75,7 +75,7 @@ class PocketCubeCoords:
         twist = is_ud.argmax(axis=2)  # (N, 7)
         k = (twist[..., None] + np.arange(3)) % 3  # read colors starting at the U/D one
         canonical = np.take_along_axis(colors, k, axis=2)
-        perm = self._piece_of_code[canonical @ np.array([36, 6, 1])]
+        perm = self.piece_of_code[canonical @ np.array([36, 6, 1])]
         if (perm < 0).any() or (is_ud.sum(axis=2) != 1).any():
             raise ValueError("not a valid pocket cube state")
         return perm, twist
@@ -141,6 +141,20 @@ class PocketCubeCoords:
     def unrank(self, index: IntArray) -> States:
         p, t = np.divmod(np.asarray(index, dtype=np.int64), N_TWIST)
         return self.encode(self.unrank_perm(p), self.unrank_twist(t))
+
+    def parity(self, index: IntArray) -> IntArray:
+        """Corner-permutation parity (0 even, 1 odd) of each state.
+
+        It equals distance mod 2: the solved state is even and every quarter
+        turn is a 4-cycle (odd), so each move flips both. The Lehmer digits
+        count inversions, so their sum mod 2 is the parity.
+        """
+        rest = np.asarray(index, dtype=np.int64) // N_TWIST
+        total = np.zeros_like(rest)
+        for i in range(N_PIECES):
+            digit, rest = np.divmod(rest, factorial(N_PIECES - 1 - i))
+            total += digit
+        return total % 2
 
     # ── moves on indices ──────────────────────────────────────────────────
 
