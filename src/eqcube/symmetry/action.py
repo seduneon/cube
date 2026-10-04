@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 from eqcube.symmetry.perm import Perm, PermGroup
 
@@ -91,6 +91,33 @@ class FunctionAction:
         if self.n_codomain == 0:
             return tuple(x[g_inv(p)] for p in range(n))
         return tuple(g(x[g_inv(p)] + n) - n for p in range(n))
+
+
+@dataclass(frozen=True)
+class ConjugationAction:
+    """g·h = g h g^{-1}: the group acting on permutations of the same degree.
+
+    Used on puzzle moves: a symmetry must map moves to moves.
+    """
+
+    group: PermGroup
+
+    def __call__(self, g: Perm, x: Perm, /) -> Perm:
+        return g * x * g.inverse()
+
+
+@dataclass(frozen=True)
+class SetAction(Generic[X]):
+    """g·{x1, ..., xk} = {g·x1, ..., g·xk}: lifts any action to finite sets."""
+
+    base: Action[X]
+
+    @property
+    def group(self) -> PermGroup:
+        return self.base.group
+
+    def __call__(self, g: Perm, x: frozenset[X], /) -> frozenset[X]:
+        return frozenset(self.base(g, y) for y in x)
 
 
 # ── generic algorithms (work for any Action) ──────────────────────────────

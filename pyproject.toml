@@ -42,3 +42,7 @@ typeCheckingMode = "strict"
 pythonVersion = "3.11"
 venvPath = "."
 venv = ".venv"
+# numpy/torch stubs leave many overloads "partially unknown"; keep the rest of strict.
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
