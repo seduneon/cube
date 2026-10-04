@@ -17,6 +17,7 @@ import numpy.typing as npt
 
 from eqcube.data.symmetry import apply_symmetry
 from eqcube.data.table import DistanceTable
+from eqcube.inference.backup import sibling_posterior
 from eqcube.puzzles.base import States
 from eqcube.search.base import Heuristic, Searcher
 from eqcube.symmetry.perm import PermGroup
@@ -72,6 +73,26 @@ def sibling_ranking(heuristic: Heuristic, table: DistanceTable, index: IntArray)
     children = table.indexer.expand(index)  # (N, M)
     n, m = children.shape
     costs = heuristic(table.indexer.unrank(children.reshape(-1))).reshape(n, m)
+    return rank_children(table, index, costs)
+
+
+def posterior_sibling_ranking(
+    predict: Predictor, table: DistanceTable, index: IntArray, w: float = 1.0, beta: float = 1.0
+) -> Report:
+    """Rank children by E[d(child) | parent, siblings] (docs/THEORY.md, section 3)."""
+    index = index[table.dist[index] >= 1]
+    children = table.indexer.expand(index)
+    n, m = children.shape
+    own = predict(table.indexer.unrank(index))
+    child_lp = predict(table.indexer.unrank(children.reshape(-1))).reshape(n, m, -1)
+    solved = np.zeros(n, dtype=bool)
+    post = sibling_posterior(own, child_lp, solved, w, beta)
+    return rank_children(table, index, post.child_expected)
+
+
+def rank_children(table: DistanceTable, index: IntArray, costs: FloatArray) -> Report:
+    """Score a (parents, children) cost matrix against the true down/up directions."""
+    children = table.indexer.expand(index)
     down = table.dist[children] < table.dist[index, None]
 
     diff = costs[:, :, None] - costs[:, None, :]  # [i, a, b] = cost_a - cost_b

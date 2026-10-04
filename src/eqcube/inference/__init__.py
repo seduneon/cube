@@ -10,11 +10,16 @@ evaluation and search accept the result unchanged:
 
 from eqcube.inference.backup import (
     BackupPredictor,
+    BackupRule,
     PoolingFit,
+    SiblingPosterior,
     backup_log_probs,
+    consistent_log_likelihood,
+    consistent_log_probs,
     fit_pooling,
     log_survival,
     pooled_log_probs,
+    sibling_posterior,
 )
 from eqcube.inference.calibration import (
     Predictor,
@@ -29,17 +34,22 @@ from eqcube.inference.calibration import (
 
 __all__ = [
     "BackupPredictor",
+    "BackupRule",
     "PoolingFit",
     "Predictor",
     "PredictorHeuristic",
     "Reduce",
+    "SiblingPosterior",
     "TemperedPredictor",
     "backup_log_probs",
+    "consistent_log_likelihood",
+    "consistent_log_probs",
     "costs_from_log_probs",
     "fit_pooling",
     "fit_temperature",
     "log_survival",
     "nll",
     "pooled_log_probs",
+    "sibling_posterior",
     "temper",
 ]
