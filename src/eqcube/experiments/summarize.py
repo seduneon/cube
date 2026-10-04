@@ -23,6 +23,11 @@ COLUMNS: list[tuple[str, tuple[str, ...]]] = [
     ("solve(expected)", ("eval", "search/expected", "solve_rate")),
     ("excess", ("eval", "search/expected", "mean_excess")),
     ("eq_err(task)", ("eval", "equivariance", "task", "max")),
+    ("nll", ("eval", "calibration", "raw", "nll")),
+    ("T", ("eval", "calibration", "temperature")),
+    ("ece(T)", ("eval", "calibration", "tempered", "ece")),
+    ("backup_acc", ("eval", "backup", "backup", "accuracy")),
+    ("backup_best", ("eval", "backup", "siblings/backup", "best_child")),
     ("train_s", ("train_seconds",)),
 ]
 
@@ -66,3 +71,45 @@ def summarize(root: str | Path) -> str:
 
 if __name__ == "__main__":
     print(summarize(sys.argv[1] if len(sys.argv) > 1 else "results/runs"))
+
+
+BAND = (7, 8, 9, 10)
+
+
+def _band_mean(d: dict[str, float | None] | None, depths: tuple[int, ...]) -> float:
+    if not d:
+        return float("nan")
+    values = [v for k in depths if (v := d.get(str(k))) is not None]
+    return float(np.mean(values)) if values else float("nan")
+
+
+def band_summary(root: str | Path, band: tuple[int, ...] = BAND) -> str:
+    """One row per run: hard-band metrics, calibration, backup gain, search."""
+    head = [
+        "run", "params", "band acc", "band best_child", "acc(depth)", "nll", "T", "ece(T)",
+        "backup band acc", "backup best_child", "solve", "excess", "train_s",
+    ]  # fmt: skip
+    lines = ["| " + " | ".join(head) + " |", "|" + "---:|" * len(head)]
+    for r in sorted(load_results(root), key=lambda r: r.get("name", r["preset"])):
+        e = r["eval"]
+        backup = e.get("backup", {})
+        cal = e.get("calibration", {})
+        values = [
+            _band_mean(e["test/per_depth"]["per_depth"]["accuracy"], band),
+            _band_mean(e["siblings/expected"]["per_depth"]["best_child"], band),
+            e["test/per_depth"]["accuracy"],
+            _get(cal, ("raw", "nll")),
+            _get(cal, ("temperature",)),
+            _get(cal, ("tempered", "ece")),
+            _band_mean(backup.get("backup", {}).get("per_depth", {}).get("accuracy"), band),
+            _band_mean(
+                backup.get("siblings/backup", {}).get("per_depth", {}).get("best_child"), band
+            ),
+            _get(e, ("search/expected", "solve_rate")),
+            _get(e, ("search/expected", "mean_excess")),
+        ]
+        cells = [r.get("name", r["preset"]), f"{r['n_params']:,}"]
+        cells += ["—" if v is None or v != v else f"{v:.3f}" for v in values]
+        cells.append(f"{r['train_seconds']:.0f}")
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)

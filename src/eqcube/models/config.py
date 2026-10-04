@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from torch import nn
 
+from eqcube.models.heads import HeadName
 from eqcube.models.value_net import EquivariantBody, Layout, MLPBody, OneHotEncoder, ValueNet
 from eqcube.nn.layers import FeatureType
 from eqcube.puzzles import PUZZLES
@@ -30,6 +31,7 @@ class ModelConfig:
     width: int = 32  # hidden channels (equivariant) or hidden units (mlp)
     depth: int = 3  # number of hidden layers
     parity_mask: bool = False  # forbid distances of the wrong parity (see models/parity.py)
+    head: HeadName = "categorical"  # or "ordinal" (CORN survival head, see models/heads.py)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -81,7 +83,7 @@ def _build_equivariant(cfg: ModelConfig) -> nn.Module:
     in_type = FeatureType(gsets[cfg.input_layout], in_channels)
     hidden_type = FeatureType(gsets[cfg.hidden_layout], cfg.width)
 
-    body = EquivariantBody(in_type, hidden_type, cfg.depth, spec.max_distance + 1)
+    body = EquivariantBody(in_type, hidden_type, cfg.depth, spec.max_distance + 1, cfg.head)
     return ValueNet(OneHotEncoder(c, cfg.input_layout), body, _output_filter(cfg))
 
 
@@ -90,7 +92,7 @@ def _build_mlp(cfg: ModelConfig) -> nn.Module:
     spec = PUZZLES[cfg.puzzle]
     puzzle = spec.make()
     in_dim = puzzle.n_positions * puzzle.n_colors
-    body = MLPBody(in_dim, cfg.width, cfg.depth, spec.max_distance + 1)
+    body = MLPBody(in_dim, cfg.width, cfg.depth, spec.max_distance + 1, cfg.head)
     return ValueNet(OneHotEncoder(puzzle.n_colors, "stickers"), body, _output_filter(cfg))
 
 

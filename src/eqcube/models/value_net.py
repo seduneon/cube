@@ -1,4 +1,4 @@
-"""Value networks: states (B, P) int -> distance-class logits (B, num_classes).
+"""Value networks: states (B, P) int -> distance-class log-probabilities (B, num_classes).
 
 Every model is ``ValueNet(encoder, body)`` (template: encode, then body), so
 search and training never care which architecture they hold.
@@ -11,6 +11,7 @@ from typing import Literal
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from eqcube.models.heads import HeadName, make_head
 from eqcube.nn.layers import EquivariantLinear, FeatureType, InvariantPool, ResidualBlock
 
 Layout = Literal["stickers", "positions"]
@@ -35,17 +36,22 @@ class OneHotEncoder(nn.Module):
 
 
 class EquivariantBody(nn.Module):
-    """lift -> residual blocks -> invariant pool -> linear head."""
+    """lift -> residual blocks -> invariant pool -> head (log-probabilities)."""
 
     def __init__(
-        self, in_type: FeatureType, hidden_type: FeatureType, depth: int, num_classes: int
+        self,
+        in_type: FeatureType,
+        hidden_type: FeatureType,
+        depth: int,
+        num_classes: int,
+        head: HeadName = "categorical",
     ) -> None:
         super().__init__()
         self.in_type = in_type
         self.lift = EquivariantLinear(in_type, hidden_type)
         self.blocks = nn.Sequential(*(ResidualBlock(hidden_type) for _ in range(depth - 1)))
         self.pool = InvariantPool(hidden_type)
-        self.head = nn.Linear(self.pool.out_dim, num_classes)
+        self.head = make_head(head, self.pool.out_dim, num_classes)
 
     def forward(self, x: Tensor) -> Tensor:
         self.in_type.check(x)
@@ -55,16 +61,18 @@ class EquivariantBody(nn.Module):
 
 
 class MLPBody(nn.Module):
-    """Unconstrained baseline: flatten -> (linear, relu) x depth -> linear."""
+    """Unconstrained baseline: flatten -> (linear, relu) x depth -> head."""
 
-    def __init__(self, in_dim: int, width: int, depth: int, num_classes: int) -> None:
+    def __init__(
+        self, in_dim: int, width: int, depth: int, num_classes: int, head: HeadName = "categorical"
+    ) -> None:
         super().__init__()
         layers: list[nn.Module] = []
         d = in_dim
         for _ in range(depth):
             layers += [nn.Linear(d, width), nn.ReLU()]
             d = width
-        layers.append(nn.Linear(d, num_classes))
+        layers.append(make_head(head, d, num_classes))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -72,7 +80,7 @@ class MLPBody(nn.Module):
 
 
 class ValueNet(nn.Module):
-    """logits = output_filter(states, body(encoder(states))); the filter is optional."""
+    """log_probs = output_filter(states, body(encoder(states))); the filter is optional."""
 
     def __init__(
         self, encoder: nn.Module, body: nn.Module, output_filter: nn.Module | None = None
@@ -81,7 +89,7 @@ class ValueNet(nn.Module):
         self.encoder, self.body, self.output_filter = encoder, body, output_filter
 
     def forward(self, states: Tensor) -> Tensor:
-        logits = self.body(self.encoder(states))
+        log_probs = self.body(self.encoder(states))
         if self.output_filter is not None:
-            logits = self.output_filter(states, logits)
-        return logits
+            log_probs = self.output_filter(states, log_probs)
+        return log_probs

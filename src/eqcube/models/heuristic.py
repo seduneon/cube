@@ -1,6 +1,6 @@
 """Adapters from a value network to NumPy callables.
 
-    NetPredictor   states -> logits          (used by evaluation)
+    NetPredictor   states -> log-probabilities (used by evaluation)
     NetHeuristic   states -> estimated cost  (used by search)
 
 Both run batched under ``inference_mode`` on any device. The math after the
@@ -9,14 +9,13 @@ forward pass happens in NumPy float64 (MPS has no float64).
 
 from __future__ import annotations
 
-from typing import Literal
-
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import nn
 
-Reduce = Literal["argmax", "expected"]
+from eqcube.inference.calibration import Reduce, costs_from_log_probs
+
 FloatArray = npt.NDArray[np.float64]
 
 
@@ -37,14 +36,7 @@ class NetPredictor:
         return np.concatenate(out) if out else np.empty((0, 0))
 
 
-def costs_from_logits(logits: FloatArray, reduce: Reduce) -> FloatArray:
-    """argmax: most likely distance. expected: sum_k k * softmax(logits)_k."""
-    if reduce == "argmax":
-        return logits.argmax(axis=1).astype(np.float64)
-    z = logits - logits.max(axis=1, keepdims=True)
-    p = np.exp(z)
-    p /= p.sum(axis=1, keepdims=True)
-    return p @ np.arange(logits.shape[1], dtype=np.float64)
+costs_from_logits = costs_from_log_probs  # models output log-probabilities
 
 
 class NetHeuristic:

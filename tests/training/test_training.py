@@ -9,7 +9,7 @@ import torch
 
 from eqcube.data import DistanceTable, Partition, PartitionConfig
 from eqcube.experiments.runner import EvalConfig, Workspace, grid, run_one
-from eqcube.experiments.summarize import summarize
+from eqcube.experiments.summarize import band_summary, summarize
 from eqcube.models import PRESETS, load_checkpoint
 from eqcube.puzzles.pocket_coords import pocket_coords
 from eqcube.training import TrainConfig, Trainer, resolve_device, training_indices
@@ -51,7 +51,7 @@ def test_fit_writes_checkpoint_and_learns(
 ) -> None:
     result = Trainer(PRESETS["task"], TINY, table, partition).fit(tmp_path)
     assert result.epochs_run == 3 and len(result.history) == 3
-    assert result.history[-1]["train_ce"] < result.history[0]["train_ce"]
+    assert result.history[-1]["train_loss"] < result.history[0]["train_loss"]
     _, cfg, meta = load_checkpoint(tmp_path / "best.pt")
     assert cfg == PRESETS["task"]
     assert TrainConfig.from_dict(meta["train_config"]) == TINY
@@ -62,7 +62,7 @@ def test_fit_writes_checkpoint_and_learns(
 def test_fit_is_deterministic(table: DistanceTable, partition: Partition, tmp_path: Path) -> None:
     a = Trainer(PRESETS["mlp_small"], TINY, table, partition).fit(tmp_path / "a")
     b = Trainer(PRESETS["mlp_small"], TINY, table, partition).fit(tmp_path / "b")
-    assert [r["train_ce"] for r in a.history] == [r["train_ce"] for r in b.history]
+    assert [r["train_loss"] for r in a.history] == [r["train_loss"] for r in b.history]
 
 
 def test_early_stopping(table: DistanceTable, partition: Partition, tmp_path: Path) -> None:
@@ -86,7 +86,9 @@ def test_fit_on_mps(table: DistanceTable, partition: Partition, tmp_path: Path) 
 
 def test_run_one_end_to_end_and_resume(tmp_path: Path) -> None:
     ws = Workspace(tmp_path / "cache")
-    quick = EvalConfig(sibling_per_depth=10, equivariance_states=20, beam_max_steps=8)
+    quick = EvalConfig(
+        sibling_per_depth=10, equivariance_states=20, beam_max_steps=8, backup_per_depth=20
+    )
     (spec,) = grid(["task"], [2000], [0.5], [1], replace(TINY, max_epochs=2), quick)
     result = run_one(spec, ws, tmp_path / "runs", verbose=False)
     assert (tmp_path / "runs" / spec.run_id / "result.json").exists()
@@ -95,9 +97,22 @@ def test_run_one_end_to_end_and_resume(tmp_path: Path) -> None:
     again = run_one(spec, ws, tmp_path / "runs", verbose=False)  # skipped, read from disk
     assert again["train_seconds"] == result["train_seconds"]
     assert "task/n2000_a0.5_random" in summarize(tmp_path / "runs")
+    cal, backup = result["eval"]["calibration"], result["eval"]["backup"]
+    assert cal["temperature"] > 0 and cal["tempered"]["nll"] <= cal["raw"]["nll"] + 0.05
+    assert backup["w"] + backup["beta"] > 0
+    assert {"base", "backup", "siblings/base", "siblings/backup"} <= set(backup)
+    assert "| task |" in band_summary(tmp_path / "runs")
 
 
 def test_grid_is_a_product() -> None:
     specs = grid(["task", "mlp"], [10, 20, 30], [0.0, 1.0], [1, 2])
     assert len(specs) == 2 * 3 * 2 * 2
     assert len({s.run_id for s in specs}) == len(specs)
+
+
+def test_bellman_variants_are_distinct() -> None:
+    from eqcube.experiments.bellman import variants
+
+    specs = variants()
+    assert len(specs) == 10 == len({s.run_id for s in specs})
+    assert {s.model.head for s in specs} == {"categorical", "ordinal"}

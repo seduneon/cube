@@ -14,7 +14,7 @@ from eqcube.puzzles.pocket_coords import pocket_coords
 from eqcube.puzzles.pocket_cube import task_group
 from eqcube.symmetry.action import FunctionAction
 from eqcube.training import TrainConfig
-from eqcube.training.trainer import class_weights
+from eqcube.training.losses import class_weights
 
 C = pocket_coords()
 
@@ -94,7 +94,7 @@ def test_parity_mask_keeps_task_invariance() -> None:
 
 
 def test_train_config_roundtrip_with_new_fields() -> None:
-    cfg = TrainConfig(depth_weights=(1.0, 2.0), full_depth=5, loss="balanced_ce")
+    cfg = TrainConfig(depth_weights=(1.0, 2.0), full_depth=5, class_balance=True)
     d = cfg.to_dict()
     d["depth_weights"] = list(d["depth_weights"])  # as after a JSON round trip
     assert TrainConfig.from_dict(d) == cfg

@@ -8,9 +8,9 @@ from typing import Any, Literal
 import torch
 
 from eqcube.data.partition import PartitionConfig
+from eqcube.training.losses import LossName
 
 SamplerName = Literal["tempered", "random_walk"]
-LossName = Literal["ce", "balanced_ce"]
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,11 @@ class TrainConfig:
     depth_weights: tuple[float, ...] | None = None  # tempered: per-depth boost
     full_depth: int = -1  # tempered: depths <= full_depth are taken whole
     walk_length: int = 20  # random_walk: max scramble length
-    loss: LossName = "ce"  # balanced_ce: every depth weighs the same in the loss
+    loss: LossName = "ce"  # or "ordinal_bce" (see training/losses.py)
+    class_balance: bool = False  # every depth weighs the same in the loss
+    consistency_weight: float = 0.0  # > 0 adds Bellman consistency on unlabeled states
+    consistency_batch: int = 512  # unlabeled states per step
+    ema_decay: float = 0.995  # target network for consistency targets
     partition: PartitionConfig = field(default_factory=PartitionConfig)
 
     batch_size: int = 512
@@ -39,6 +43,8 @@ class TrainConfig:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TrainConfig:
         d = dict(d)
+        if d.get("loss") == "balanced_ce":  # older configs: balancing was a loss name
+            d["loss"], d["class_balance"] = "ce", True
         if d.get("depth_weights") is not None:
             d["depth_weights"] = tuple(d["depth_weights"])
         p = dict(d.pop("partition", {}))

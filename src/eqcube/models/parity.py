@@ -9,6 +9,7 @@ task symmetry (they preserve distance), so the mask keeps models invariant.
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 from eqcube.puzzles.pocket_coords import N_PIECES, PocketCubeCoords
@@ -42,7 +43,7 @@ class CornerParity(nn.Module):
 
 
 class ParityMask(nn.Module):
-    """Adds a large negative number to the logits of distances with the wrong parity."""
+    """Removes the distances of the wrong parity and renormalizes (log-probabilities in and out)."""
 
     classes: Tensor
 
@@ -52,6 +53,6 @@ class ParityMask(nn.Module):
         self.penalty = penalty
         self.register_buffer("classes", torch.arange(num_classes) % 2)
 
-    def forward(self, states: Tensor, logits: Tensor) -> Tensor:
+    def forward(self, states: Tensor, log_probs: Tensor) -> Tensor:
         wrong = self.classes[None, :] != self.parity(states)[:, None]
-        return logits - self.penalty * wrong.to(logits.dtype)
+        return F.log_softmax(log_probs - self.penalty * wrong.to(log_probs.dtype), dim=-1)

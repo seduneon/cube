@@ -19,11 +19,13 @@ symmetry/   Perm, PermGroup, Action, GSet          pure Python + NumPy
                  ├── training/     TrainConfig, Trainer              torch
                  └── experiments/  grid runner, CLI, summary table   glue
 
-evaluation/  value, sibling-ranking, equivariance, solve metrics   NumPy
-             (models enter only as callables)
+inference/   predictor decorators: TemperedPredictor,           NumPy
+             BackupPredictor (Bellman backup), PredictorHeuristic
+evaluation/  value, sibling-ranking, equivariance, solve,        NumPy
+             calibration metrics (models enter only as callables)
 ```
 
-Rule: `symmetry`, `puzzles`, `search`, `data`, and `evaluation` never import torch
+Rule: `symmetry`, `puzzles`, `search`, `data`, `evaluation`, and `inference` never import torch
 (enforced by `tests/test_architecture.py`). `search` never imports `models`:
 `NetHeuristic` satisfies the `Heuristic` protocol structurally.
 
@@ -125,6 +127,37 @@ DistanceTable (BFS once, cached .npy)
 Fact found while testing: **local maxima** (states where every move goes
 closer to solved) are 51% of depth 12, 98% of depth 13, and all of depth 14.
 The hard ranking decisions are at middle depths.
+
+## Distributions: heads, losses, calibration, Bellman
+
+**Contract: every model outputs log-probabilities over distances 0..14.**
+Search, evaluation, the parity mask, and every predictor decorator rely on
+this and nothing more.
+
+- Heads (`models/heads.py`, both subclass `nn.Linear` so checkpoint keys stay
+  the same): `categorical` (log-softmax) and `ordinal`, the CORN survival
+  head: S(k) = P(d > k) = Π_{j≤k} σ(z_j), so S always decreases.
+- Losses (`training/losses.py`): `ce` (NLL; with the ordinal head this *is*
+  the CORN loss) and `ordinal_bce` (Σ_k BCE on "d > k", so far errors cost
+  more). `class_balance` is a separate switch.
+- Calibration (`inference/calibration.py`): temperature T fit on validation
+  NLL (Guo et al. 2017); `TemperedPredictor` wraps any predictor.
+- Bellman structure: d(s) > k ⟺ every child has d > k−1, so
+  S_s(k) = Π_c S_c(k−1) if children are independent.
+  - Test time (`inference/backup.py`): `BackupPredictor` pools the model's
+    own survival with the children's product (a log opinion pool,
+    w·log S_own + β·log S_bk, fit on validation). It is a predictor, so
+    search and evaluation take it unchanged; `depth=2` recurses.
+  - Training (`training/bellman.py`): `consistency_weight > 0` adds
+    KL(backup of children ‖ model) on unlabeled train-split states. The
+    children are scored by an EMA target network with no gradient.
+  - The torch (training) and NumPy (inference) backups are twins; a test
+    keeps them equal, and another checks that exact children give an exact
+    parent.
+- Evaluation adds `calibration` (raw vs tempered NLL/ECE/Brier) and
+  `backup` (base vs backed-up accuracy and sibling ranking on test, after
+  fitting on val). `python -m eqcube.experiments.bellman` compares heads,
+  losses, and consistency at 20k and 200k labels.
 
 ## Compute (measured on an M1 MacBook Air, batch 512)
 

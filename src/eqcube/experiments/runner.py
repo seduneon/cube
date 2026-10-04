@@ -21,11 +21,20 @@ from eqcube.data.partition import Partition, PartitionConfig
 from eqcube.data.suites import EvalSuite, default_suites
 from eqcube.data.symmetry import orbit_representatives
 from eqcube.data.table import DistanceTable
+from eqcube.evaluation.calibration import calibration_metrics
 from eqcube.evaluation.metrics import (
     equivariance_error,
     sibling_ranking,
     solve_metrics,
     value_metrics,
+)
+from eqcube.inference import (
+    BackupPredictor,
+    PredictorHeuristic,
+    TemperedPredictor,
+    fit_pooling,
+    fit_temperature,
+    temper,
 )
 from eqcube.models.checkpoint import load_checkpoint
 from eqcube.models.config import PRESETS, ModelConfig
@@ -44,6 +53,10 @@ class EvalConfig:
     beam_width: int = 20
     beam_max_steps: int = 30
     search: bool = True
+    calibration: bool = True  # fit a temperature on val, report NLL / ECE / Brier
+    backup: bool = True  # fit a one-step Bellman backup on val, report it on test
+    backup_per_depth: int = 200  # states per depth for fitting / testing the backup
+    backup_search: bool = False  # also run beam search with the backup (7x cost)
 
 
 @dataclass(frozen=True)
@@ -153,7 +166,63 @@ def evaluate(spec: RunSpec, ws: Workspace, checkpoint: Path) -> dict[str, Any]:
                 max_steps=spec.eval.beam_max_steps,
             )
             report[f"search/{reduce}"] = solve_metrics(searcher, table, suites["test/search"].index)
+
+    temperature = 1.0
+    if spec.eval.calibration:
+        val = suites["val/per_depth"]
+        temperature = fit_temperature(predict(table.indexer.unrank(val.index)), val.distance)
+        test_lp = predict(table.indexer.unrank(per_depth.index))
+        report["calibration"] = {
+            "temperature": temperature,
+            "raw": calibration_metrics(test_lp, per_depth.distance),
+            "tempered": calibration_metrics(temper(test_lp, temperature), per_depth.distance),
+        }
+
+    if spec.eval.backup:
+        report["backup"] = _evaluate_backup(spec, ws, predict, temperature)
     return report
+
+
+def _per_depth_subset(index: np.ndarray, distance: np.ndarray, k: int) -> np.ndarray:
+    return np.concatenate([index[distance == d][:k] for d in np.unique(distance)])
+
+
+def _evaluate_backup(
+    spec: RunSpec, ws: Workspace, predict: NetPredictor, temperature: float
+) -> dict[str, Any]:
+    """Fit (w, beta) of the one-step backup on val; compare base vs backup on test."""
+    table, suites = ws.table, ws.suites(spec.train.partition)
+    puzzle = table.indexer.puzzle
+    base = TemperedPredictor(predict, temperature)
+    k = spec.eval.backup_per_depth
+
+    val = suites["val/per_depth"]
+    val_index = _per_depth_subset(val.index, val.distance, k)
+    fit = fit_pooling(base, puzzle, table.indexer.unrank(val_index), table.labels(val_index))
+    backup = BackupPredictor(base, puzzle, fit.w, fit.beta)
+
+    test = suites["test/per_depth"]
+    test_index = _per_depth_subset(test.index, test.distance, k)
+    states, labels = table.indexer.unrank(test_index), table.labels(test_index)
+    out: dict[str, Any] = {
+        "w": fit.w,
+        "beta": fit.beta,
+        "val_nll": fit.nll,
+        "base": value_metrics(base(states), labels),
+        "backup": value_metrics(backup(states), labels),
+        "base_calibration": calibration_metrics(base(states), labels),
+        "backup_calibration": calibration_metrics(backup(states), labels),
+        "siblings/base": sibling_ranking(PredictorHeuristic(base), table, test_index),
+        "siblings/backup": sibling_ranking(PredictorHeuristic(backup), table, test_index),
+    }
+    if spec.eval.backup_search:
+        searcher = BeamSearch(
+            PredictorHeuristic(backup),
+            width=spec.eval.beam_width,
+            max_steps=spec.eval.beam_max_steps,
+        )
+        out["search"] = solve_metrics(searcher, table, suites["test/search"].index)
+    return out
 
 
 def run_one(
@@ -167,7 +236,7 @@ def run_one(
     def log(row: dict[str, Any]) -> None:
         if verbose:
             print(
-                f"[{spec.run_id}] epoch {row['epoch']:3d}  train_ce {row['train_ce']:.4f}  "
+                f"[{spec.run_id}] epoch {row['epoch']:3d}  train_loss {row['train_loss']:.4f}  "
                 f"val_ce {row['val_ce']:.4f}  val_acc {row['val_accuracy']:.3f}  "
                 f"{row['seconds']:.1f}s",
                 flush=True,

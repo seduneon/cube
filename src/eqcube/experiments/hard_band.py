@@ -17,17 +17,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from eqcube.experiments.runner import EvalConfig, RunSpec, Workspace, run_one
-from eqcube.experiments.summarize import load_results
+from eqcube.experiments.summarize import BAND, band_summary
 from eqcube.models.config import PRESETS
 from eqcube.training.config import TrainConfig
-
-BAND = (7, 8, 9, 10)
 
 
 def variants(seed: int = 42, base: TrainConfig | None = None) -> list[RunSpec]:
@@ -36,7 +31,7 @@ def variants(seed: int = 42, base: TrainConfig | None = None) -> list[RunSpec]:
     boost = tuple(3.0 if d in BAND else 1.0 for d in range(15))
     changes: list[tuple[str, Any, TrainConfig]] = [
         ("baseline", model, base),
-        ("balanced", model, replace(base, loss="balanced_ce")),
+        ("balanced", model, replace(base, class_balance=True)),
         ("alpha0", model, replace(base, alpha=0.0, full_depth=5)),
         ("band3x", model, replace(base, depth_weights=boost)),
         ("n1m", model, replace(base, train_size=1_000_000)),
@@ -44,47 +39,6 @@ def variants(seed: int = 42, base: TrainConfig | None = None) -> list[RunSpec]:
         ("wide", replace(model, width=24), base),
     ]
     return [RunSpec("task", m, t, EvalConfig(), tag) for tag, m, t in changes]
-
-
-def _mean(d: dict[str, float | None] | None, depths: tuple[int, ...]) -> float:
-    if not d:
-        return float("nan")
-    values = [v for k in depths if (v := d.get(str(k))) is not None]
-    return float(np.mean(values)) if values else float("nan")
-
-
-def band_summary(root: str | Path) -> str:
-    rows = []
-    for r in load_results(root):
-        e = r["eval"]
-        rows.append(
-            (
-                r.get("name", r["preset"]),
-                r["n_params"],
-                _mean(e["test/per_depth"]["per_depth"]["accuracy"], BAND),
-                _mean(e["siblings/expected"]["per_depth"]["best_child"], BAND),
-                _mean(e["siblings/expected"]["per_depth"]["pair_accuracy"], BAND),
-                e["test/per_depth"]["accuracy"],
-                e["search/expected"]["solve_rate"],
-                e["search/expected"]["mean_excess"],
-                e["search/expected"]["per_depth"]["solve_rate"].get("14"),
-                r["train_seconds"],
-            )
-        )
-    head = (
-        "| variant | params | band acc | band best_child | band pair_acc | acc(depth) "
-        "| solve | excess | solve@14 | train_s |"
-    )
-    lines = [head, "|" + "---:|" * 10]
-    for row in sorted(rows):
-        name, params, *vals, secs = row
-        cells = (
-            [name, f"{params:,}"]
-            + ["—" if v is None or v != v else f"{v:.3f}" for v in vals]
-            + [f"{secs:.0f}"]
-        )
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> None:

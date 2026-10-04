@@ -8,6 +8,9 @@
   stopping does not just track the most common depths.
 * The best checkpoint (by validation cross-entropy) stores the model config,
   the train config, the epoch and the validation metrics.
+* Optional: class balancing and the loss strategy (``training/losses.py``),
+  and Bellman consistency on unlabeled states (``training/bellman.py``).
+* Models output log-probabilities, so cross-entropy is ``nll_loss``.
 """
 
 from __future__ import annotations
@@ -31,7 +34,9 @@ from eqcube.data.suites import EvalSuite, per_depth_suite
 from eqcube.data.table import DistanceTable
 from eqcube.models.checkpoint import save_checkpoint
 from eqcube.models.config import ModelConfig, build_model
+from eqcube.training.bellman import BellmanConsistency
 from eqcube.training.config import TrainConfig, resolve_device
+from eqcube.training.losses import class_weights, make_loss
 
 IntArray = npt.NDArray[np.int64]
 Logger = Callable[[dict[str, Any]], None]
@@ -47,24 +52,18 @@ class TrainResult:
     history: list[dict[str, Any]] = field(default_factory=list)
 
 
+def tempered_sampler(cfg: TrainConfig, partition: Partition) -> TemperedSampler:
+    return TemperedSampler(
+        partition, cfg.alpha, weights=cfg.depth_weights, full_depth=cfg.full_depth
+    )
+
+
 def training_indices(cfg: TrainConfig, partition: Partition) -> IntArray:
     """The fixed training set for ``cfg`` (deterministic in cfg.seed)."""
     rng = np.random.default_rng(cfg.seed)
     if cfg.sampler == "tempered":
-        sampler = TemperedSampler(
-            partition, cfg.alpha, weights=cfg.depth_weights, full_depth=cfg.full_depth
-        )
-        return sampler.sample_unique(cfg.train_size, rng)
+        return tempered_sampler(cfg, partition).sample_unique(cfg.train_size, rng)
     return RandomWalkSampler(partition, cfg.walk_length).sample(cfg.train_size, rng)
-
-
-def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
-    """Weights that make every present class contribute equally to the mean loss."""
-    counts = torch.bincount(labels, minlength=num_classes).float()
-    present = counts > 0
-    weights = torch.zeros(num_classes, device=labels.device)
-    weights[present] = len(labels) / (present.sum() * counts[present])
-    return weights
 
 
 def validation_suite(partition: Partition, seed: int = 0) -> EvalSuite:
@@ -103,10 +102,10 @@ class Trainer:
         model.eval()
         total_ce, correct = 0.0, 0
         for start in range(0, len(x), 4096):
-            logits = model(x[start : start + 4096])
+            log_probs = model(x[start : start + 4096])
             target = y[start : start + 4096]
-            total_ce += float(F.cross_entropy(logits, target, reduction="sum"))
-            correct += int((logits.argmax(dim=1) == target).sum())
+            total_ce += float(F.nll_loss(log_probs, target, reduction="sum"))
+            correct += int((log_probs.argmax(dim=1) == target).sum())
         return {"val_ce": total_ce / len(x), "val_accuracy": correct / len(x)}
 
     def fit(self, out_dir: str | Path) -> TrainResult:
@@ -121,7 +120,21 @@ class Trainer:
 
         model = build_model(self.model_cfg).to(self.device)
         num_classes = self.table.max_distance + 1
-        loss_weight = class_weights(y_train, num_classes) if cfg.loss == "balanced_ce" else None
+        loss_fn = make_loss(cfg.loss)
+        loss_weight = class_weights(y_train, num_classes) if cfg.class_balance else None
+        consistency = (
+            BellmanConsistency(
+                model,
+                self.table,
+                tempered_sampler(cfg, self.partition),
+                cfg.consistency_batch,
+                cfg.ema_decay,
+                self.device,
+                cfg.seed,
+            )
+            if cfg.consistency_weight > 0
+            else None
+        )
         n_params = sum(p.numel() for p in model.parameters())
         opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -139,17 +152,21 @@ class Trainer:
             total, seen = 0.0, 0
             for start in range(0, len(order), cfg.batch_size):
                 batch = order[start : start + cfg.batch_size]
-                loss = F.cross_entropy(model(x_train[batch]), y_train[batch], weight=loss_weight)
+                loss = loss_fn(model(x_train[batch]), y_train[batch], loss_weight)
+                if consistency is not None:
+                    loss = loss + cfg.consistency_weight * consistency.loss(model)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()
+                if consistency is not None:
+                    consistency.update_target(model)
                 total += float(loss.detach()) * len(batch)
                 seen += len(batch)
             sched.step()
 
             row: dict[str, Any] = {
                 "epoch": epoch,
-                "train_ce": total / seen,
+                "train_loss": total / seen,
                 **self._validate(model, x_val, y_val),
                 "lr": sched.get_last_lr()[0],
                 "seconds": time.time() - t0,
