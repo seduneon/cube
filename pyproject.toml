@@ -26,6 +26,7 @@ packages = ["src/eqcube"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["slow: exhaustive checks over the full state space (deselect with -m 'not slow')"]
 
 [tool.ruff]
 line-length = 100

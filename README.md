@@ -15,11 +15,12 @@ Equivariant value networks + search for the 2x2x2 Pocket Cube.
 ## Dependency rule
 
 ```
-symmetry  <-  puzzles  <-  search          (NumPy only)
+symmetry  <-  puzzles  <-  search, data    (NumPy only)
 symmetry  <-  nn       <-  models          (torch)
 ```
 
-`symmetry`, `puzzles`, `search` never import torch (tested). See
+`symmetry`, `puzzles`, `search`, `data` never import torch (tested).
+Fast iteration: `pytest -m "not slow"` skips the exhaustive full-state-space checks. See
 `docs/ARCHITECTURE.md` for the full design.
 
 ## Quick tour

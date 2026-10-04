@@ -23,6 +23,7 @@ decoding to stickers:
   move(index, m) = perm_table[p, m] * 729 + twist_table[t, m]
 
 ``rank``/``unrank`` convert batches of sticker states to and from indices.
+Full BFS over indices lives in ``eqcube.data.table.bfs``.
 """
 
 from __future__ import annotations
@@ -59,6 +60,11 @@ class PocketCubeCoords:
         code = self.piece_colors @ np.array([36, 6, 1])
         self._piece_of_code = np.full(216, -1, dtype=np.int64)
         self._piece_of_code[code] = np.arange(8)
+        self._solved_index = int(self.rank(puzzle.solved_states(1))[0])
+
+    @property
+    def n_states(self) -> int:
+        return N_STATES
 
     # ── stickers <-> (perm, twist) ────────────────────────────────────────
 
@@ -166,27 +172,11 @@ class PocketCubeCoords:
         p, t = np.divmod(index, N_TWIST)
         return self.perm_table[p] * N_TWIST + self.twist_table[t]
 
-    @cached_property
+    @property
     def solved_index(self) -> int:
-        return int(self.rank(self.puzzle.solved_states(1))[0])
+        return self._solved_index
 
 
 @cache
 def pocket_coords() -> PocketCubeCoords:
     return PocketCubeCoords(pocket_cube())
-
-
-def bfs_distance_table(coords: PocketCubeCoords) -> npt.NDArray[np.int8]:
-    """Exact distance-to-solved for every index, by BFS on move tables."""
-    dist = np.full(N_STATES, -1, dtype=np.int8)
-    frontier = np.array([coords.solved_index], dtype=np.int64)
-    dist[frontier] = 0
-    depth = 0
-    while len(frontier):
-        depth += 1
-        children = np.unique(coords.expand(frontier))
-        frontier = children[dist[children] < 0]
-        dist[frontier] = depth
-    if (dist < 0).any():
-        raise RuntimeError("BFS did not reach every state")
-    return dist

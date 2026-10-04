@@ -5,13 +5,13 @@ import itertools
 import numpy as np
 import pytest
 
+from eqcube.data.table import bfs
 from eqcube.puzzles.base import bfs_distances, state_keys
 from eqcube.puzzles.pocket_coords import (
     N_PERM,
     N_STATES,
     N_TWIST,
     PocketCubeCoords,
-    bfs_distance_table,
     pocket_coords,
 )
 from eqcube.puzzles.pocket_cube import MAX_DISTANCE
@@ -28,7 +28,7 @@ KNOWN_COUNTS = [1, 6, 27, 120, 534, 2256, 8969, 33058, 114149, 360508, 930588, 1
 
 @pytest.fixture(scope="module")
 def dist() -> np.ndarray:
-    return bfs_distance_table(C)
+    return bfs(C)
 
 
 # ── bijections ────────────────────────────────────────────────────────────

@@ -7,9 +7,10 @@ How the math maps to code, and why each boundary is where it is.
 ```
 symmetry/   Perm, PermGroup, Action, GSet          pure Python + NumPy
    ▲
-   ├── puzzles/  PermutationPuzzle, pocket cube, symmetry groups   NumPy
+   ├── puzzles/  PermutationPuzzle, pocket cube, coordinates       NumPy
    │      ▲
-   │      └── search/  Heuristic protocol, BeamSearch               NumPy
+   │      ├── search/  Heuristic protocol, BeamSearch               NumPy
+   │      └── data/    DistanceTable, Partition, samplers, suites   NumPy
    │
    └── nn/       FeatureType, EquivariantLinear, Norm, Pool          torch
           ▲
@@ -17,7 +18,7 @@ symmetry/   Perm, PermGroup, Action, GSet          pure Python + NumPy
                        NetHeuristic (adapter: model -> Heuristic)
 ```
 
-Rule: `symmetry`, `puzzles`, and `search` never import torch
+Rule: `symmetry`, `puzzles`, `search`, and `data` never import torch
 (enforced by `tests/test_architecture.py`). `search` never imports `models`:
 `NetHeuristic` satisfies the `Heuristic` protocol structurally.
 
@@ -75,10 +76,31 @@ Twists are recorded per slot, with every slot's stickers in the same
 rotational order (`corner_slots`). A move's effect on the permutation then
 ignores twists, and its effect on twists ignores which piece is where, so
 moves act on indices through two small tables (5040×6 and 729×6), with no
-decoding. The full BFS (`bfs_distance_table`) runs on indices in about 2 s
+decoding. The full BFS (`eqcube.data.table.bfs`) runs on indices in about 2 s
 and stores one `int8` per state (3.6 MB). Tests check the bijections
 exhaustively, check the tables against sticker moves, and check the BFS
 counts against the known distribution.
+
+## Data: one table, one partition, many samplers and suites
+
+```
+DistanceTable (BFS once, cached .npy)
+   └── Partition: every index -> train | val | test, by splitmix64 hash + seed
+         ├── samplers draw ONLY from train: TemperedSampler(alpha), RandomWalkSampler
+         └── suites  draw ONLY from test/val: per_depth, uniform, search starts
+```
+
+- The partition never depends on the sampler, so samplers and suites can
+  be swapped freely without leakage.
+- `policy="random"` hashes each state on its own; `policy="orbit"` hashes its
+  S3-orbit representative, so symmetric copies stay on the same side.
+- States at depth <= 4 (688 of them) are shared by every split: they can be
+  enumerated exhaustively, so held-out generalization means nothing there.
+- `TemperedSampler`: p(d) ∝ n_d^alpha (1 = uniform states, 0.5 = v1 sqrt,
+  0 = uniform depths). `sample_unique` builds fixed training sets: small
+  depths are taken whole, and the rest is redistributed.
+- Random walks rarely reach depth 14 (0 of 10k with length ≤ 20), a known
+  weakness of walk-based data.
 
 ## The symmetry finding
 
@@ -97,8 +119,9 @@ U, F, R form a triangle, and S3 is that triangle's symmetry group.
 
 Pure rotations (O, used by v1 and the paper), S6, and every other element of
 O_h × S6 do **not** preserve BFS distance in this environment, because R/U/F
-never move the DBL corner. `tests/puzzles/test_pocket_cube.py` checks this
-exhaustively up to depth 5.
+never move the DBL corner. `tests/data/test_data.py` checks that S3 preserves
+the distance of **all 3,674,160 states** (marked `slow`), and
+`tests/puzzles/test_pocket_cube.py` checks that every other element fails.
 
 Not yet used: **inversion**, d(g) = d(g⁻¹), which would double the group to
 12. It is not a permutation of sticker-color features, so it needs group
