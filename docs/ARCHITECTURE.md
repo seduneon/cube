@@ -133,11 +133,29 @@ The hard ranking decisions are at middle depths.
 | task, color | 130–140k/s | 190k/s | ~5 s |
 | rotation | 47k/s | 74k/s | ~14 s |
 | mlp_small, mlp | 230–430k/s | 330–350k/s | ~3 s |
-| rotation_color | 4k/s | 6k/s | **~175 s** |
+| rotation_color | 4k → 12.5k/s | 6k → 16.4k/s | 175 s → ~60 s |
 
-`rotation_color` is slow because `EquivariantLinear` materializes the full
-144×144 kernel. The Kronecker (α/β) fast path for direct-product groups is the
-fix (see "Known costs").
+## EquivariantLinear strategies
+
+`EquivariantLinear` keeps one contract (FeatureType in, FeatureType out, one
+weight per pair orbit) and delegates the computation (Strategy pattern):
+
+- `DenseOrbitMap` (any group): builds the n_out × n_in kernel from orbit
+  weights and multiplies. Cost per channel pair: n_out · n_in.
+- `FactoredOrbitMap` (product G-sets A × B whose pair orbits factor):
+  K = Σ θ[a, b] P_a ⊗ Q_b, applied without building K: mix B with each Q_b,
+  then one spatial kernel per b over A. Cost: |A'||B'||A|·n_b.
+  - Factoring is exact iff #orbits(product) == #orbits(A) · #orbits(B)
+    (`factored_pair_orbits`). Product orbits always refine the cells, so equal
+    counts mean equal partitions.
+  - `auto` picks it only when it is cheaper (n_b < |B|): S6 on colors (2 < 6)
+    yes; fixed colors (36 > 6) no; the diagonal task S3 never factors.
+  - Fast path when the B orbits are {same, different} (2-transitive, e.g. S6):
+    I, J − I are rewritten as I, J, so the J term is one spatial product on
+    the sum over B (v1's α/β trick, derived instead of hand-coded).
+
+Measured on one 144→144 layer (20 channels, batch 512, M1 GPU): 63 ms → ~5–9 ms.
+End to end the model gains 2.7× (the other layers now dominate).
 
 ## The symmetry finding
 
@@ -188,10 +206,8 @@ averaging (with a colors → sticker-permutation decoder) or a piece encoding.
 
 ## Known costs / next optimizations
 
-- `EquivariantLinear` materializes the full kernel `(c_out, c_in, n_out, n_in)`
-  on every forward pass. That is fine for positions (24) but heavy for
-  stickers × stickers (144²). Options: cache the kernel in eval mode, or use
-  the Kronecker fast path for direct-product groups (v1's α/β trick).
+- `DenseOrbitMap` still materializes its kernel on every forward pass. That
+  is cheap for 24-point layers. Caching it in eval mode would speed up search.
 - `PermGroup` stores every element. That is fine up to about 10⁵; beyond
   that, Schreier–Sims.
 - `NetHeuristic` defaults to `argmax` (v1 behaviour); `expected` may rank

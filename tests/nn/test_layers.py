@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from eqcube.nn import EquivariantLinear, FeatureType, InvariantPool, PointwiseNorm, ResidualBlock
+from eqcube.nn.layers import DenseOrbitMap
 from eqcube.puzzles.pocket_cube import SYMMETRIES
 from eqcube.symmetry.gset import GSet, pair_orbit_labels
 from eqcube.symmetry.perm import Perm, PermGroup
@@ -94,3 +95,80 @@ def test_mismatched_groups_rejected() -> None:
 def test_norm_rejects_single_channel() -> None:
     with pytest.raises(ValueError):
         PointwiseNorm(FeatureType(gsets("rotation")["positions"], 1))
+
+
+# ── factored strategy ─────────────────────────────────────────────────────
+
+FACTORABLE = ["trivial", "rotation", "color", "rotation_color", "isometry_color"]
+
+
+def test_factorization_criterion() -> None:
+    from eqcube.symmetry.gset import factored_pair_orbits
+
+    st = gsets("rotation_color")["stickers"]
+    orbits = factored_pair_orbits(st, st)
+    assert orbits is not None and (orbits.n_a, orbits.n_b) == (24, 2)
+    task = gsets("task")["stickers"]
+    assert factored_pair_orbits(task, task) is None  # diagonal S3 couples position and color
+    pos = gsets("rotation_color")["positions"]
+    assert factored_pair_orbits(pos, pos) is None  # not built as a product
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("rotation_color", "FactoredOrbitMap"), ("color", "FactoredOrbitMap"),
+     ("rotation", "DenseOrbitMap"), ("trivial", "DenseOrbitMap"), ("task", "DenseOrbitMap")],
+)  # fmt: skip
+def test_auto_picks_cheaper_strategy(name: str, expected: str) -> None:
+    t = FeatureType(gsets(name)["stickers"], 2)
+    assert type(EquivariantLinear(t, t).map).__name__ == expected
+
+
+def test_forcing_factored_on_non_factoring_group_fails() -> None:
+    t = FeatureType(gsets("task")["stickers"], 2)
+    with pytest.raises(ValueError, match="do not factor"):
+        EquivariantLinear(t, t, impl="factored")
+
+
+@pytest.mark.parametrize("name", FACTORABLE)
+def test_factored_matches_dense_exactly(name: str) -> None:
+    """Same function space: copy factored weights into a dense layer, same outputs."""
+    st = gsets(name)["stickers"]
+    t_in, t_out = FeatureType(st, 3), FeatureType(st, 2)
+    fact = EquivariantLinear(t_in, t_out, impl="factored").double()
+    dense = EquivariantLinear(t_in, t_out, impl="dense").double()
+    assert fact.weight.numel() == dense.weight.numel()
+
+    kernel = fact.kernel()
+    assert isinstance(dense.map, DenseOrbitMap)
+    labels = dense.map.pair_orbit
+    with torch.no_grad():
+        flat = kernel.reshape(*kernel.shape[:2], -1)
+        dense.weight.zero_()
+        dense.weight[:, :, labels.reshape(-1)] = flat  # every orbit entry is equal
+        assert torch.equal(dense.map.kernel(), kernel)  # kernel is constant on dense orbits
+        fact.bias.normal_()  # type: ignore[union-attr]
+        dense.bias.copy_(fact.bias)  # type: ignore[arg-type]
+    x = torch.randn(4, 144, 3, dtype=torch.float64)
+    torch.testing.assert_close(fact(x), dense(x))
+
+
+@pytest.mark.parametrize("name", FACTORABLE)
+def test_factored_is_equivariant(name: str) -> None:
+    gs = gsets(name)
+    t = FeatureType(gs["stickers"], 3)
+    layer = EquivariantLinear(t, t, impl="factored").double()
+    x = torch.randn(4, 144, 3, dtype=torch.float64)
+    for g in some_elements(SYMMETRIES[name]()):
+        torch.testing.assert_close(
+            layer(act(gs["stickers"], g, x)), act(gs["stickers"], g, layer(x))
+        )
+
+
+def test_same_or_different_fast_path_only_for_two_transitive_colors() -> None:
+    def fast(name: str) -> bool:
+        t = FeatureType(gsets(name)["stickers"], 2)
+        return EquivariantLinear(t, t, impl="factored").map.same_or_different  # type: ignore[union-attr]
+
+    assert fast("rotation_color") and fast("color") and fast("isometry_color")
+    assert not fast("rotation") and not fast("trivial")

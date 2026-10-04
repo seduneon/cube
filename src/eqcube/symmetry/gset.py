@@ -17,7 +17,7 @@ Constructions mirror the math:
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache, cached_property
 
 import numpy as np
@@ -38,6 +38,8 @@ class GSet:
 
     group: PermGroup
     images: tuple[Perm, ...]
+    factors: tuple[GSet, GSet] | None = field(default=None, repr=False)
+    """(A, B) if this G-set was built as A.product(B); enables factored layers."""
 
     def __post_init__(self) -> None:
         if len(self.images) != len(self.group.generators):
@@ -77,7 +79,7 @@ class GSet:
             Perm(tuple(a.arr[i] * m + b.arr[j] for i in range(self.size) for j in range(m)))
             for a, b in zip(self.images, other.images, strict=True)
         )
-        return GSet(self.group, images)
+        return GSet(self.group, images, factors=(self, other))
 
     # ── structure ─────────────────────────────────────────────────────────
 
@@ -150,3 +152,35 @@ def _propagate_min_labels(labels: IntArray, perms: list[tuple[int, ...]]) -> tup
         labels = new
     _, compact = np.unique(labels, return_inverse=True)
     return compact.astype(np.int64), int(compact.max()) + 1
+
+
+@dataclass(frozen=True)
+class FactoredPairOrbits:
+    """Pair orbits of (A' x B') x (A x B) that are exactly products of factor orbits.
+
+    Then every G-invariant kernel is sum_{a, b} theta[a, b] * (P_a kron Q_b),
+    with P_a the indicator of spatial pair orbit a and Q_b of color pair orbit b.
+    """
+
+    a_labels: IntArray  # (|A'|, |A|) pair-orbit id in the first factor
+    n_a: int
+    b_labels: IntArray  # (|B'|, |B|) pair-orbit id in the second factor
+    n_b: int
+
+
+def factored_pair_orbits(out: GSet, inp: GSet) -> FactoredPairOrbits | None:
+    """Factor the pair orbits of out x inp, or None if they do not factor.
+
+    Orbits of the product always refine the products of factor orbits (g acts
+    on each coordinate), and every product cell is non-empty. So the two
+    partitions coincide exactly when their counts agree.
+    """
+    if out.factors is None or inp.factors is None:
+        return None
+    (a_out, b_out), (a_in, b_in) = out.factors, inp.factors
+    a_labels, n_a = pair_orbit_labels(a_out, a_in)
+    b_labels, n_b = pair_orbit_labels(b_out, b_in)
+    _, n = pair_orbit_labels(out, inp)
+    if n != n_a * n_b:
+        return None
+    return FactoredPairOrbits(a_labels, n_a, b_labels, n_b)
