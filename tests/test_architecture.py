@@ -7,7 +7,8 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "module", ["eqcube.symmetry", "eqcube.puzzles", "eqcube.search", "eqcube.data"]
+    "module",
+    ["eqcube.symmetry", "eqcube.puzzles", "eqcube.search", "eqcube.data", "eqcube.evaluation"],
 )
 def test_layer_does_not_import_torch(module: str) -> None:
     code = f"import sys, {module}; sys.exit('torch' in sys.modules)"

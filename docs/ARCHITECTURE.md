@@ -15,10 +15,15 @@ symmetry/   Perm, PermGroup, Action, GSet          pure Python + NumPy
    └── nn/       FeatureType, EquivariantLinear, Norm, Pool          torch
           ▲
           └── models/  ValueNet, ModelConfig, registry, checkpoint,  torch
-                       NetHeuristic (adapter: model -> Heuristic)
+                 ▲     NetPredictor / NetHeuristic (model -> NumPy callables)
+                 ├── training/     TrainConfig, Trainer              torch
+                 └── experiments/  grid runner, CLI, summary table   glue
+
+evaluation/  value, sibling-ranking, equivariance, solve metrics   NumPy
+             (models enter only as callables)
 ```
 
-Rule: `symmetry`, `puzzles`, `search`, and `data` never import torch
+Rule: `symmetry`, `puzzles`, `search`, `data`, and `evaluation` never import torch
 (enforced by `tests/test_architecture.py`). `search` never imports `models`:
 `NetHeuristic` satisfies the `Heuristic` protocol structurally.
 
@@ -101,6 +106,38 @@ DistanceTable (BFS once, cached .npy)
   depths are taken whole, and the rest is redistributed.
 - Random walks rarely reach depth 14 (0 of 10k with length ≤ 20), a known
   weakness of walk-based data.
+
+## Training and evaluation
+
+- `Trainer` trains on a fixed set of `train_size` distinct states (the
+  tempered sampler) with AdamW and cosine LR, early-stops on cross-entropy
+  over the **per-depth** validation suite, and stores the best checkpoint
+  with model config, train config, and metrics.
+- Evaluation reports metrics overall and per depth:
+  value (CE, accuracy, MAE), **sibling ranking** (does the heuristic rank
+  d−1 children above d+1 ones, and is the lowest-cost child a d−1 one: what
+  greedy and beam search rely on), equivariance error, and beam-search solve
+  rate and excess length, for both `argmax` and `expected` heuristics.
+- Runs are resumable (`result.json` per run), so a grid can move between
+  machines. `python -m eqcube.experiments.run --quick` checks a machine in
+  about 15 s.
+
+Fact found while testing: **local maxima** (states where every move goes
+closer to solved) are 51% of depth 12, 98% of depth 13, and all of depth 14.
+The hard ranking decisions are at middle depths.
+
+## Compute (measured on an M1 MacBook Air, batch 512)
+
+| preset | CPU | MPS | 1M-state epoch (MPS) |
+|---|---|---|---|
+| task, color | 130–140k/s | 190k/s | ~5 s |
+| rotation | 47k/s | 74k/s | ~14 s |
+| mlp_small, mlp | 230–430k/s | 330–350k/s | ~3 s |
+| rotation_color | 4k/s | 6k/s | **~175 s** |
+
+`rotation_color` is slow because `EquivariantLinear` materializes the full
+144×144 kernel. The Kronecker (α/β) fast path for direct-product groups is the
+fix (see "Known costs").
 
 ## The symmetry finding
 

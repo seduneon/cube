@@ -23,6 +23,18 @@ symmetry  <-  nn       <-  models          (torch)
 Fast iteration: `pytest -m "not slow"` skips the exhaustive full-state-space checks. See
 `docs/ARCHITECTURE.md` for the full design.
 
+## Run experiments
+
+```bash
+python -m eqcube.experiments.run --quick                      # 15 s machine check
+python -m eqcube.experiments.run --presets task mlp_small \
+    --sizes 50000 200000 --alphas 0.5 --seeds 42 43 44 \
+    --out results/exp1 --cache results/cache                  # resumable grid
+python -m eqcube.experiments.summarize results/exp1           # markdown table
+```
+
+On a laptop, wrap long runs in `caffeinate -i` (macOS) so the machine does not sleep.
+
 ## Quick tour
 
 ```python
