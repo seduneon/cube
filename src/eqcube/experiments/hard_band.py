@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="results/hard_band")
     ap.add_argument("--cache", default="results/cache")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--reevaluate", action="store_true", help="recompute eval of finished runs")
     ap.add_argument("--only", nargs="*", help="run only these variants")
     args = ap.parse_args(argv)
 
@@ -53,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     specs = [s for s in variants(args.seed) if not args.only or s.tag in args.only]
     for i, spec in enumerate(specs, 1):
         print(f"=== {i}/{len(specs)}: {spec.run_id}", flush=True)
-        run_one(spec, ws, args.out)
+        run_one(spec, ws, args.out, reevaluate=args.reevaluate)
     print(band_summary(args.out))
 
 

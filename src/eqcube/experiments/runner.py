@@ -226,12 +226,25 @@ def _evaluate_backup(
 
 
 def run_one(
-    spec: RunSpec, ws: Workspace, out_root: str | Path, verbose: bool = True
+    spec: RunSpec,
+    ws: Workspace,
+    out_root: str | Path,
+    verbose: bool = True,
+    reevaluate: bool = False,
 ) -> dict[str, Any]:
+    """Train and evaluate one run, or reuse it if ``result.json`` exists.
+
+    ``reevaluate=True`` keeps the trained checkpoint and training record but
+    recomputes the evaluation (after evaluation code changed).
+    """
     out = Path(out_root) / spec.run_id
     result_path = out / "result.json"
     if result_path.exists():
-        return json.loads(result_path.read_text())
+        result = json.loads(result_path.read_text())
+        if reevaluate:
+            result["eval"] = evaluate(spec, ws, out / "best.pt")
+            result_path.write_text(json.dumps(result, indent=1, default=float))
+        return result
 
     def log(row: dict[str, Any]) -> None:
         if verbose:

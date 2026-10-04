@@ -73,3 +73,19 @@ def testlowest_per_group() -> None:
     costs = np.array([5.0, 2.0, 1.0, 9.0, 1.0, 0.0])
     keep = lowest_per_group(owner, costs, 2)
     assert sorted(keep.tolist()) == [1, 2, 4, 5]
+
+
+def test_goal_is_found_even_if_heuristic_hates_the_solved_state() -> None:
+    """Regression: a model that scores the solved state worst must not prune it away."""
+    solved_key = PC.solved_states(1)[0].tobytes()
+
+    def hostile(states: np.ndarray) -> np.ndarray:
+        costs = ORACLE(states)
+        is_goal = np.array([s.tobytes() == solved_key for s in states])
+        return np.where(is_goal, 1e9, costs)
+
+    for d in (1, 3, DEPTH):
+        starts = sample_by_distance(d, 20)
+        results = BeamSearch(hostile, width=2).solve(PC, starts)
+        assert_valid(starts, results)
+        assert all(r.length == d for r in results)

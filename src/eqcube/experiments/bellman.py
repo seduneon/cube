@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--cache", default="results/cache")
     ap.add_argument("--sizes", nargs="+", type=int, default=[20_000, 200_000])
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--reevaluate", action="store_true", help="recompute eval of finished runs")
     ap.add_argument("--only", nargs="*", help="run only these variant tags")
     args = ap.parse_args(argv)
 
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     ]
     for i, spec in enumerate(specs, 1):
         print(f"=== {i}/{len(specs)}: {spec.run_id}", flush=True)
-        run_one(spec, ws, args.out)
+        run_one(spec, ws, args.out, reevaluate=args.reevaluate)
     print(band_summary(args.out))
 
 

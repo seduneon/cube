@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="results/runs")
     ap.add_argument("--cache", default="results/cache")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--reevaluate", action="store_true", help="recompute eval of finished runs")
     args = ap.parse_args(argv)
 
     base = TrainConfig(
@@ -53,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     specs = grid(args.presets, sizes, args.alphas, args.seeds, base, eval_cfg)
     for i, spec in enumerate(specs, 1):
         print(f"=== run {i}/{len(specs)}: {spec.run_id}", flush=True)
-        run_one(spec, ws, args.out)
+        run_one(spec, ws, args.out, reevaluate=args.reevaluate)
     print(summarize(args.out))
 
 

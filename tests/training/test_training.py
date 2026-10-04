@@ -96,6 +96,9 @@ def test_run_one_end_to_end_and_resume(tmp_path: Path) -> None:
     assert 0.0 <= result["eval"]["search/expected"]["solve_rate"] <= 1.0
     again = run_one(spec, ws, tmp_path / "runs", verbose=False)  # skipped, read from disk
     assert again["train_seconds"] == result["train_seconds"]
+    redone = run_one(spec, ws, tmp_path / "runs", verbose=False, reevaluate=True)
+    assert redone["train_seconds"] == result["train_seconds"]  # training kept
+    assert redone["eval"]["test/per_depth"] == result["eval"]["test/per_depth"]
     assert "task/n2000_a0.5_random" in summarize(tmp_path / "runs")
     cal, backup = result["eval"]["calibration"], result["eval"]["backup"]
     assert cal["temperature"] > 0 and cal["tempered"]["nll"] <= cal["raw"]["nll"] + 0.05
