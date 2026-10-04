@@ -207,3 +207,22 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Virtual env / tool caches
+.venv/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.out
+paper/*.log
+paper/*.synctex.gz
