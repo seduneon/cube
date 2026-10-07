@@ -26,6 +26,9 @@ class TrainConfig:
     consistency_weight: float = 0.0  # > 0 adds Bellman consistency on unlabeled states
     consistency_batch: int = 512  # unlabeled states per step
     ema_decay: float = 0.995  # target network for consistency targets
+    ranking_weight: float = 0.0  # > 0 adds the sibling ranking loss (training/ranking.py)
+    ranking_batch: int = 512  # labeled parents per step (6 children each)
+    ranking_tau: float = 1.0  # temperature of the Boltzmann policy over siblings
     partition: PartitionConfig = field(default_factory=PartitionConfig)
 
     batch_size: int = 512

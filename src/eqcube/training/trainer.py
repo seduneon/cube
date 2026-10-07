@@ -9,7 +9,8 @@
 * The best checkpoint (by validation cross-entropy) stores the model config,
   the train config, the epoch and the validation metrics.
 * Optional: class balancing and the loss strategy (``training/losses.py``),
-  and Bellman consistency on unlabeled states (``training/bellman.py``).
+  Bellman consistency on unlabeled states (``training/bellman.py``), and
+  the sibling ranking loss on labeled parents (``training/ranking.py``).
 * Models output log-probabilities, so cross-entropy is ``nll_loss``.
 """
 
@@ -37,6 +38,7 @@ from eqcube.models.config import ModelConfig, build_model
 from eqcube.training.bellman import BellmanConsistency
 from eqcube.training.config import TrainConfig, resolve_device
 from eqcube.training.losses import class_weights, make_loss
+from eqcube.training.ranking import SiblingRanking
 
 IntArray = npt.NDArray[np.int64]
 Logger = Callable[[dict[str, Any]], None]
@@ -115,7 +117,8 @@ class Trainer:
         torch.manual_seed(cfg.seed)
         gen = torch.Generator().manual_seed(cfg.seed)
 
-        x_train, y_train = self._tensors(training_indices(cfg, self.partition))
+        train_index = training_indices(cfg, self.partition)
+        x_train, y_train = self._tensors(train_index)
         x_val, y_val = self._tensors(validation_suite(self.partition).index)
 
         model = build_model(self.model_cfg).to(self.device)
@@ -133,6 +136,18 @@ class Trainer:
                 cfg.seed,
             )
             if cfg.consistency_weight > 0
+            else None
+        )
+        ranking = (
+            SiblingRanking(
+                self.table,
+                train_index,
+                cfg.ranking_batch,
+                cfg.ranking_tau,
+                self.device,
+                cfg.seed,
+            )
+            if cfg.ranking_weight > 0
             else None
         )
         n_params = sum(p.numel() for p in model.parameters())
@@ -155,6 +170,8 @@ class Trainer:
                 loss = loss_fn(model(x_train[batch]), y_train[batch], loss_weight)
                 if consistency is not None:
                     loss = loss + cfg.consistency_weight * consistency.loss(model)
+                if ranking is not None:
+                    loss = loss + cfg.ranking_weight * ranking.loss(model)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()

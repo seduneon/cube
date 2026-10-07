@@ -94,7 +94,12 @@ def test_consistency_loss_and_ema(table: DistanceTable, partition: Partition) ->
 
 @pytest.mark.parametrize(
     "change",
-    [{"loss": "ordinal_bce"}, {"class_balance": True}, {"consistency_weight": 1.0}],
+    [
+        {"loss": "ordinal_bce"},
+        {"class_balance": True},
+        {"consistency_weight": 1.0},
+        {"ranking_weight": 1.0},
+    ],
 )
 def test_fit_with_new_options(
     table: DistanceTable, partition: Partition, tmp_path: Path, change: dict[str, object]
@@ -102,6 +107,7 @@ def test_fit_with_new_options(
     cfg = replace(
         TrainConfig(train_size=2000, max_epochs=2, patience=2, batch_size=256, device="cpu"),
         consistency_batch=64,
+        ranking_batch=64,
         **change,  # type: ignore[arg-type]
     )
     model_cfg = replace(PRESETS["task"], head="ordinal")

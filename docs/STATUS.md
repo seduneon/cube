@@ -32,21 +32,39 @@ experiments (resumable grids). About 250 tests; `pytest -m "not slow"` takes ~50
    best-child for every decent model; the exact two-sided rule does not beat
    it (THEORY.md §9: correlated sibling errors).
 7. Models are overconfident (temperature 1.5–2.2).
+8. (Oct 7, post-hoc, no retraining) Exact facts as predictor wrappers help
+   every model: the pattern-database bound + parity mostly raises accuracy
+   (band acc 0.33 → 0.53 for categorical 200k), and inversion averaging
+   (d(s) = d(s⁻¹)) mostly raises ranking. With the backup, the 1M model
+   reaches band best-child 0.951 (was 0.918). Greedy search solve rate
+   rises on every model (with backup: 0.725 → 0.820, 0.805 → 0.903,
+   0.910 → 0.966). Details: IMPROVEMENTS.md.
+9. (Oct 7) The ranking rule barely matters: expected value, median,
+   quantiles and P(closest) agree within 0.01 best-child; argmax and
+   P(down) are worse. What matters is the information in the distributions.
+10. (Oct 7, smoke test, 1 seed) Sibling ranking loss at 20k labels: greedy
+    solve 0.036 → 0.368, width-20 solve 0.831 → 0.936. Confounded: the loss
+    reads 6 extra child labels per parent. Equal-information control needed
+    (IMPROVEMENTS.md, 2.1).
 
 ## Open questions
 
-- Which score should rank beam candidates? (Expected value, quantiles,
-  dominance, probability of being closest: THEORY.md + the study plan.)
+- Which score should rank beam candidates? Empirically (finding 9) any
+  sensible location summary works; the open part is *why* (when do rules
+  disagree? only for multimodal or differently shaped distributions).
 - How to model siblings' shared errors (a latent shift; ensembles)?
 - Does Bellman help when labels are scarce, given enough training steps?
 - Non-backtracking (cavity) depth-2 backup; a learned aggregation (GNN).
 
 ## Next experiments (in order)
 
+Full improvement plan, ordered easiest/safest first: `docs/IMPROVEMENTS.md`
+(Tier 0: done, except fitting the backup weights by ranking instead of NLL).
+
 1. 20k labels with a step-based training budget (is Bellman's 20k failure a
    budget problem?).
 2. 3 seeds for: categorical vs ordinal+Bellman, each with and without backup.
-3. Ranking-rule comparison on existing checkpoints (`rank_children`).
+3. ~~Ranking-rule comparison on existing checkpoints~~ (done: finding 9).
 4. Backup heuristic inside beam search, with a cache (≈1× cost).
 5. The full preset grid (paper table), about 10 h on the M1.
 
