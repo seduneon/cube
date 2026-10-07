@@ -183,7 +183,7 @@ def evaluate(spec: RunSpec, ws: Workspace, checkpoint: Path) -> dict[str, Any]:
     return report
 
 
-def _per_depth_subset(index: np.ndarray, distance: np.ndarray, k: int) -> np.ndarray:
+def per_depth_subset(index: np.ndarray, distance: np.ndarray, k: int) -> np.ndarray:
     return np.concatenate([index[distance == d][:k] for d in np.unique(distance)])
 
 
@@ -197,12 +197,12 @@ def _evaluate_backup(
     k = spec.eval.backup_per_depth
 
     val = suites["val/per_depth"]
-    val_index = _per_depth_subset(val.index, val.distance, k)
+    val_index = per_depth_subset(val.index, val.distance, k)
     fit = fit_pooling(base, puzzle, table.indexer.unrank(val_index), table.labels(val_index))
     backup = BackupPredictor(base, puzzle, fit.w, fit.beta)
 
     test = suites["test/per_depth"]
-    test_index = _per_depth_subset(test.index, test.distance, k)
+    test_index = per_depth_subset(test.index, test.distance, k)
     states, labels = table.indexer.unrank(test_index), table.labels(test_index)
     out: dict[str, Any] = {
         "w": fit.w,

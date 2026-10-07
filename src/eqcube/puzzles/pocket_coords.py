@@ -176,6 +176,58 @@ class PocketCubeCoords:
         flat = children.reshape(-1, self.puzzle.n_positions)
         return self.rank_twist(self.decode(flat)[1]).reshape(N_TWIST, self.puzzle.n_moves)
 
+    # ── pattern databases (exact sub-puzzle distances) ────────────────────
+
+    @cached_property
+    def perm_distance(self) -> npt.NDArray[np.int8]:
+        """(5040,) moves needed to place every piece, ignoring twists."""
+        return _small_bfs(self.perm_table, self.rank_perm(np.arange(N_PIECES)[None])[0])
+
+    @cached_property
+    def twist_distance(self) -> npt.NDArray[np.int8]:
+        """(729,) moves needed to orient every piece, ignoring which piece is where."""
+        return _small_bfs(self.twist_table, 0)
+
+    def lower_bound(self, index: IntArray) -> IntArray:
+        """Exact lower bound on distance: max of the two sub-puzzle distances, parity-rounded.
+
+        Solving the cube solves both sub-puzzles, so each sub-distance is <= d.
+        d has the parity of the corner permutation (``parity``), so the bound
+        can be rounded up to that parity and stay <= d (Korf 1997 for the
+        pattern databases; docs/THEORY.md section 8 for parity rounding).
+        """
+        p, t = np.divmod(np.asarray(index, dtype=np.int64), N_TWIST)
+        bound = np.maximum(self.perm_distance[p], self.twist_distance[t]).astype(np.int64)
+        return bound + (bound % 2 != self.parity(index))
+
+    # ── inversion: d(s) = d(s^-1) ────────────────────────────────────────
+
+    def sticker_perm(self, states: States) -> IntArray:
+        """(N, 24) p with state[i] = solved[p[i]]: where each sticker came from.
+
+        Unique because every sticker is identified by its piece (a unique
+        color triple) and its place in that piece's rotational order.
+        """
+        perm, twist = self.decode(states)
+        n = len(states)
+        p = np.tile(np.arange(self.puzzle.n_positions, dtype=np.int64), (n, 1))
+        rows = np.arange(n)
+        for slot in range(N_PIECES):
+            for k in range(3):
+                position = self.slot_stickers[slot, (twist[:, slot] + k) % 3]
+                p[rows, position] = self.slot_stickers[perm[:, slot], k]
+        return p
+
+    def invert(self, states: States) -> States:
+        """s -> s^-1 (the state reached by undoing s's scramble applied to solved).
+
+        If s = solved[p], then s^-1 = solved[p^-1]. Reversing a move sequence
+        and inverting each move turns a solution of s into one of s^-1, so
+        d(s^-1) = d(s); the tests check this on every state.
+        """
+        inverse = np.argsort(self.sticker_perm(states), axis=1)
+        return np.array(self.puzzle.solved, dtype=np.int8)[inverse]
+
     def move(self, index: IntArray, moves: IntArray) -> IntArray:
         """Apply ``moves[i]`` to state ``index[i]``."""
         p, t = np.divmod(index, N_TWIST)
@@ -189,6 +241,22 @@ class PocketCubeCoords:
     @property
     def solved_index(self) -> int:
         return self._solved_index
+
+
+def _small_bfs(table: IntArray, start: int) -> npt.NDArray[np.int8]:
+    """Distances from ``start`` on the graph ``table[node, move] -> node``."""
+    dist = np.full(len(table), -1, dtype=np.int8)
+    dist[start] = 0
+    frontier = np.array([start], dtype=np.int64)
+    depth = 0
+    while len(frontier):
+        depth += 1
+        children = np.unique(table[frontier])
+        frontier = children[dist[children] < 0]
+        dist[frontier] = depth
+    if (dist < 0).any():
+        raise RuntimeError("BFS did not reach every node")
+    return dist
 
 
 @cache

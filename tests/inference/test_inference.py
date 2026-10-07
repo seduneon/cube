@@ -97,6 +97,18 @@ def test_backup_fixes_a_noisy_parent(table: DistanceTable) -> None:
     assert (backed.argmax(1) == table.labels(index)).mean() > 0.95
 
 
+def test_fit_pooling_min_beta_restricts_the_grid(table: DistanceTable) -> None:
+    """An exact base needs no backup; min_beta forces one anyway (default: unrestricted)."""
+    index = np.random.default_rng(6).integers(0, C.n_states, 300)
+    states, labels = C.unrank(index), table.labels(index)
+    free = fit_pooling(oracle(table), PUZZLE, states, labels)
+    forced = fit_pooling(oracle(table), PUZZLE, states, labels, min_beta=0.5)
+    assert forced.beta >= 0.5
+    assert all(b >= 0.5 for _, b in forced.grid)
+    assert any(b == 0.0 for _, b in free.grid)
+    assert forced.nll >= free.nll
+
+
 def test_predictor_heuristic(table: DistanceTable) -> None:
     states = C.unrank(np.random.default_rng(5).integers(0, C.n_states, 50))
     h = PredictorHeuristic(oracle(table, 30.0), "argmax")

@@ -6,6 +6,8 @@ evaluation and search accept the result unchanged:
 
     TemperedPredictor(base, T)                temperature scaling
     BackupPredictor(base, puzzle, w, beta)    Bellman backup pooled with base
+    LowerBoundPredictor(base, coords)         exact bound + parity (givens.py)
+    InversionPredictor(base, coords)          pool s and s^-1 (givens.py)
 """
 
 from eqcube.inference.backup import (
@@ -31,10 +33,13 @@ from eqcube.inference.calibration import (
     nll,
     temper,
 )
+from eqcube.inference.givens import InversionPredictor, LowerBoundPredictor
 
 __all__ = [
     "BackupPredictor",
     "BackupRule",
+    "InversionPredictor",
+    "LowerBoundPredictor",
     "PoolingFit",
     "Predictor",
     "PredictorHeuristic",

@@ -119,3 +119,53 @@ def test_scrambled_states_have_consistent_labels(dist: np.ndarray) -> None:
     keys = state_keys(STATES)
     assert len(keys) == len(STATES)
     assert (dist[C.rank(STATES)] <= MAX_DISTANCE).all()
+
+
+# ── pattern databases and inversion ──────────────────────────────────────
+
+
+def test_lower_bound_is_admissible_on_every_state(dist: np.ndarray) -> None:
+    """Exhaustive (cheap: two table lookups per state)."""
+    bound = C.lower_bound(np.arange(N_STATES))
+    d = dist.astype(np.int64)
+    assert (bound <= d).all()
+    assert ((d - bound) % 2 == 0).all()  # parity-rounded
+    shallow = d <= 4
+    np.testing.assert_array_equal(bound[shallow], d[shallow])  # exact near solved
+
+
+def test_sub_puzzle_distances_reach_every_coordinate() -> None:
+    assert C.perm_distance.shape == (N_PERM,) and (C.perm_distance >= 0).all()
+    assert C.twist_distance.shape == (N_TWIST,) and (C.twist_distance >= 0).all()
+    assert C.perm_distance[0] == 0 and C.twist_distance[0] == 0  # solved
+
+
+def test_invert_undoes_the_scramble_sequence() -> None:
+    """s = solved after m1..mk  =>  s^-1 = solved after mk^-1..m1^-1."""
+    rng = np.random.default_rng(1)
+    inverse = PC.inverse_move
+    for _ in range(50):
+        seq = rng.integers(0, PC.n_moves, size=rng.integers(1, 20)).tolist()
+        s = PC.apply_sequence(PC.solved_states(1), seq)
+        undo = PC.apply_sequence(PC.solved_states(1), [inverse[m] for m in reversed(seq)])
+        np.testing.assert_array_equal(C.invert(s), undo)
+
+
+def test_invert_is_an_involution_and_fixes_solved() -> None:
+    np.testing.assert_array_equal(C.invert(C.invert(STATES)), STATES)
+    np.testing.assert_array_equal(C.invert(PC.solved_states(1)), PC.solved_states(1))
+
+
+def test_invert_preserves_distance_on_sample(dist: np.ndarray) -> None:
+    np.testing.assert_array_equal(dist[C.rank(C.invert(STATES))], dist[C.rank(STATES)])
+
+
+@pytest.mark.slow
+def test_invert_preserves_distance_on_every_state(dist: np.ndarray) -> None:
+    """Exhaustive: d(s^-1) = d(s) and s -> s^-1 is a bijection of the state space."""
+    images = np.empty(N_STATES, dtype=np.int64)
+    for start in range(0, N_STATES, 200_000):
+        index = np.arange(start, min(start + 200_000, N_STATES))
+        images[index] = C.rank(C.invert(C.unrank(index)))
+    np.testing.assert_array_equal(dist[images], dist)
+    np.testing.assert_array_equal(images[images], np.arange(N_STATES))

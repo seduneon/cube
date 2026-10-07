@@ -218,8 +218,13 @@ def fit_pooling(
     labels: IntArray,
     grid: Sequence[float] = (0.0, 0.25, 0.5, 0.75, 1.0),
     rule: BackupRule = "min",
+    min_beta: float = 0.0,
 ) -> PoolingFit:
     """Choose (w, beta) minimizing NLL on held-out states (one-step backup).
+
+    ``min_beta > 0`` forces the backup to be used. NLL alone may pick beta = 0
+    when the base is already well calibrated, although the backup still
+    improves the ranking of children (what search needs).
 
     The model is evaluated once on the states and their children; every grid
     point is then pure NumPy.
@@ -233,7 +238,7 @@ def fit_pooling(
         (w, b): nll(_combine(rule, own, child_lp, solved, w, b), labels)
         for w in grid
         for b in grid
-        if w > 0 or b > 0
+        if (w > 0 or b > 0) and b >= min_beta
     }
     (w, b), best = min(scores.items(), key=lambda kv: kv[1])
     return PoolingFit(w, b, best, scores)
